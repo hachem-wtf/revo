@@ -28,6 +28,27 @@ pub const Impl = struct {
     pub fn repeat(vm: *VM, self: Ts.tuple, n: Ts.number) !HostResult {
         return mul(vm, self, n);
     }
+
+    pub fn count_of(vm: *VM, self: Ts.tuple, search_val: Ts.any) !HostResult {
+        const tuple = try vm.tuples.get(@intFromEnum(self));
+        var counter: i16 = 0;
+        for (tuple.items) |item| {
+            if (vm.compare(item, search_val) == .eq) {
+                counter += 1;
+            }
+        }
+        return .data(Data.new.num(counter));
+    }
+
+    pub fn index_of(vm: *VM, self: Ts.tuple, search_val: Ts.any) !HostResult {
+        const tuple = try vm.tuples.get(@intFromEnum(self));
+        for (tuple.items, 0..) |item, idx| {
+            if (vm.compare(item, search_val) == .eq) {
+                return .data(Data.new.num(idx));
+            }
+        }
+        return .coreAtom(.nil);
+    }
 };
 
 pub const impls: []const api.Impl = root.impls(Impl).val ++ &[_]api.Impl{
@@ -49,6 +70,22 @@ test "tuple add and repeat" {
     try testing.topNumber("(1, 2):add((3, 4)):len()", 4);
     try testing.topNumber("(1, 2):repeat(3):len()", 6);
     try testing.topNumber("(1, 2):repeat(0):len()", 0);
+}
+
+test "get count of a value" {
+    try testing.topNumber("(1, 2):count_of(1)", 1);
+    try testing.topNumber("(1, 2, 'hello'):count_of('hello')", 1);
+    try testing.topNumber("(:true, :false, 'hello', 1, 2, {1, 'hello' = 2}):count_of(:true)", 1);
+}
+
+test "get index of a value" {
+    try testing.topNumber("(1, 2):index_of(1)", 0);
+    try testing.topNumber("(1, 2, 'hello'):index_of('hello')", 2);
+    try testing.topNumber("(:true, :false, 'hello', 1, 2, {1, 'hello' = 2}):index_of({1, 'hello' = 2})", 5);
+    try testing.topAtom(
+        "(:true, :false, 'hello', 1, 2, {1, 'hello' = 2}):index_of(3)",
+        "nil",
+    );
 }
 
 const std = @import("std");
