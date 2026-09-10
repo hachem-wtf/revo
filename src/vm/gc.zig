@@ -185,15 +185,6 @@ pub inline fn markRoots(self: *VM) void {
     for (self.metatables) |mt_id| {
         if (mt_id) |id| self.tables.mark(id, self);
     }
-
-    // caches hold Data that can reference heap objects; root them so the
-    // sweep can't free a cached value/key out from under a future hit
-    for (self.icache) |bank| {
-        for (bank) |entry| {
-            pushMark(self, entry.key);
-            pushMark(self, entry.value);
-        }
-    }
 }
 
 pub inline fn pushMark(self: *VM, data: revo.Data) void {

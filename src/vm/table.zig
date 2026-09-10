@@ -70,8 +70,6 @@ pub const TablePool = struct {
         if (self.dead.pop()) |id| {
             const t = self.tables.items[id].?;
             t.metatable = null;
-            t.ic_version = 0;
-            t.gen +%= 1;
             t.alloc = self.alloc;
             self.marks.unset(id);
             pool.relink(&self.first, &self.last, &self.next, id);
@@ -172,7 +170,6 @@ fn freeTable(t: *Table, alloc: std.mem.Allocator) void {
     }
     t.hash.deinit(alloc);
     t.metatable = null;
-    t.ic_version = 0;
     t.alloc = alloc;
 }
 
@@ -385,11 +382,6 @@ pub const Table = struct {
     array: std.ArrayList(Data),
     hash: HashPart,
     metatable: ?memory.TableID = null,
-    ic_version: usize = 0,
-    // bumped on every slot reuse so icache entries keyed on a freed table id
-    // can't match a new table that recycled the same id (version resets to 0
-    // on reuse, so version alone can't distinguish them)
-    gen: usize = 0,
 
     pub fn init(alloc: std.mem.Allocator) Table {
         return .{
@@ -412,7 +404,6 @@ pub const Table = struct {
     }
 
     pub fn put(self: *Table, table_id: memory.TableID, vm: *revo.VM, key: Data, val: Data) !void {
-        self.ic_version +%= 1;
         if (self.metatable == null) {
             try self.putRaw(key, val, vm);
         } else {
@@ -432,7 +423,6 @@ pub const Table = struct {
     }
 
     pub fn putRaw(self: *Table, key: Data, val: Data, vm: *revo.VM) !void {
-        self.ic_version +%= 1;
         if (integerArrayIndex(key)) |idx| {
             if (idx < self.array.items.len) {
                 self.array.items[idx] = val;
@@ -448,7 +438,6 @@ pub const Table = struct {
     }
 
     pub fn putRawAtom(self: *Table, id: memory.AtomID, val: Data, vm: *revo.VM) !void {
-        self.ic_version +%= 1;
         const entry = try self.hash.getOrPut(self.alloc, Data.new.atom(id), vm);
         entry.* = val;
     }
@@ -488,7 +477,6 @@ pub const Table = struct {
     }
 
     pub fn remove(self: *Table, key: Data, vm: *revo.VM) bool {
-        self.ic_version +%= 1;
         if (integerArrayIndex(key)) |idx| {
             if (idx >= self.array.items.len) return false;
             _ = self.array.orderedRemove(idx);
@@ -498,7 +486,6 @@ pub const Table = struct {
     }
 
     pub fn removeAndReturn(self: *Table, key: Data, vm: *revo.VM) ?Data {
-        self.ic_version +%= 1;
         if (integerArrayIndex(key)) |idx| {
             if (idx >= self.array.items.len) return null;
             return self.array.orderedRemove(idx);

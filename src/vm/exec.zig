@@ -617,21 +617,10 @@ inline fn execFiberDispatch(
             const key = Data.new.atom(instr.bx);
 
             if (object.asTable()) |t_id| {
-                const pc = fiber.pc - 1;
                 const t = try self.tableFast(t_id);
 
-                if (self.icacheLookup(pc, t_id, t.ic_version, t.gen, key)) |value| {
-                    @branchHint(.likely);
-                    regWrite(regs, base, instr.a, value);
-                } else if (t.getRaw(key, self)) |value| {
-                    self.icacheInsert(pc, t_id, t.ic_version, t.gen, key, value);
-                    regWrite(regs, base, instr.a, value);
-                } else if (try self.resolveField(object, key, instr.a)) |resolved| {
-                    self.icacheInsert(pc, t_id, t.ic_version, t.gen, key, resolved.value);
-                    regWrite(regs, base, instr.a, resolved.value);
-                } else {
-                    regWrite(regs, base, instr.a, revo.Data.new.core(.undef));
-                }
+                const res = (t.get(key, self) catch revo.Data.new.core(.undef)) orelse revo.Data.new.core(.undef);
+                regWrite(regs, base, instr.a, res);
             } else if (try self.resolveField(object, key, instr.a)) |resolved| {
                 regWrite(regs, base, instr.a, resolved.value);
             } else {
@@ -1340,21 +1329,7 @@ noinline fn execCallField(self: *VM, regs: []Data, base: usize, instr: Instructi
     const object = regRead(regs, base, instr.a);
     const key = regRead(regs, base, instr.a + 1);
 
-    const lookup_result = blk: {
-        if (object.asTable()) |t_id| {
-            const pc = self.currentFiber().pc - 1;
-            const t = try self.tableFast(t_id);
-            if (self.icacheLookup(pc, t_id, t.ic_version, t.gen, key)) |value|
-                break :blk VM.FieldLookup{ .value = value, .from_meta = false };
-            if (try self.resolveField(object, key, instr.a)) |resolved| {
-                self.icacheInsert(pc, t_id, t.ic_version, t.gen, key, resolved.value);
-                break :blk resolved;
-            }
-        } else if (try self.resolveField(object, key, instr.a)) |resolved| {
-            break :blk resolved;
-        }
-        break :blk null;
-    } orelse {
+    const lookup_result = try self.resolveField(object, key, instr.a) orelse {
         const key_name = if (key.asAtom()) |atom| self.stringValue(atom) else revo.std_lib.typeof(key, self);
         try self.setRuntimeMessageFmt("field `{s}` does not exist on {s}", .{ key_name, revo.std_lib.typeof(object, self) });
         return error.NotAFunction;

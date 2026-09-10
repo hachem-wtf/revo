@@ -36,17 +36,6 @@ pub const DebugInfo = struct {
     source_name: []const u8,
 };
 
-// 2-way associative inline cache for table lookups
-// compare pc/table_id/version/key then use value
-pub const ICacheEntry = struct {
-    pc: ProgramCounter,
-    table_id: mem.TableID,
-    version: usize,
-    gen: usize,
-    key: Data,
-    value: Data,
-};
-
 // main loop: run runnable fibers, wake sleepers
 // wait for io/timers if needed
 
@@ -186,20 +175,6 @@ gc_pause_factor: usize = 4,
 // allocation-heavy, small-live workloads (bench/storage.rv collected
 // every ~64kb, spending ~90% of its time in the GC)
 gc_nursery_threshold: usize = 8 * 1024 * 1024,
-
-/// for table lookups
-icache: [2][256]ICacheEntry = @splat(
-    @splat(
-        .{
-            .pc = std.math.maxInt(ProgramCounter),
-            .table_id = 0,
-            .version = 0,
-            .gen = 0,
-            .key = Data.new.nil(),
-            .value = Data.new.nil(),
-        },
-    ),
-),
 
 gc_mark_stack: std.ArrayList(MarkItem),
 gc_finalizers: std.AutoHashMap(mem.TableID, Data),
@@ -520,32 +495,6 @@ pub inline fn regWrite(slots: []Data, base: usize, reg: opcode.Register, value: 
 pub inline fn writeRegisterFast(self: *VM, base: usize, reg: opcode.Register, value: Data) !void {
     const slot = base + reg;
     self.writeRegisterUnsafe(slot, value);
-}
-
-// 2-way associative icache lookups. set index = pc ^ table_id (low bits)
-pub inline fn icacheLookup(self: *VM, pc: ProgramCounter, table_id: mem.TableID, version: usize, gen: usize, key: Data) ?Data {
-    const set = (pc ^ table_id) & (self.icache[0].len - 1);
-    const w0 = &self.icache[0][set];
-    if (w0.pc == pc and w0.table_id == table_id and w0.version == version and w0.gen == gen and w0.key.bits == key.bits)
-        return w0.value;
-    const w1 = &self.icache[1][set];
-    if (w1.pc == pc and w1.table_id == table_id and w1.version == version and w1.gen == gen and w1.key.bits == key.bits)
-        return w1.value;
-    return null;
-}
-
-pub inline fn icacheInsert(
-    self: *VM,
-    pc: ProgramCounter,
-    table_id: mem.TableID,
-    version: usize,
-    gen: usize,
-    key: Data,
-    value: Data,
-) void {
-    const set = (pc ^ table_id) & (self.icache[0].len - 1);
-    self.icache[1][set] = self.icache[0][set];
-    self.icache[0][set] = .{ .pc = pc, .table_id = table_id, .version = version, .gen = gen, .key = key, .value = value };
 }
 
 pub fn internAtom(self: *VM, name: []const u8) !mem.AtomID {
