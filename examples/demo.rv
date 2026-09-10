@@ -187,11 +187,10 @@ fn pipes() do
   print(chain)
 end
 
-# error handling: result types, orelse, ok?, err?
 fn error_handling() do
   print("\nerror handling")
 
-  # functions return (:ok, value) or (:err, error_atom) instead of exceptions
+  #* functions return (:ok, value) or (:err, error_atom) instead of exceptions *#
   fn safe_div(a, b) do
     if b == 0 (:err, :DivByZero)
     else (:ok, a / b)
@@ -210,80 +209,72 @@ fn error_handling() do
   print(result, fallback)
 end
 
-# structs;
-#   named types with fields and methods
-fn structs() do
-  print("\nstructs")
+#* tables;
+   tables with closures give you fields and methods *#
+fn tables() do
+  print("\ntables")
 
-  # struct defines a type with fields and methods
-  struct Point {
-    x: number = 0,
-    y: number = 0,
-    # constructor
-    fn new(x, y) Point{x = x, y = y},
-    # method - self refers to the instance
-    fn mag(self) self.x * self.x + self.y * self.y,
-    fn add(self, other) Point{x = self.x + other.x, y = self.y + other.y},
+  # structural types describe a table's shape; annotate bindings
+  # with them and the compiler checks the fields. method fields go
+  # in the type too, so colon calls resolve to them instead of
+  # stdlib methods with the same name
+  type Point = { x: number, y: number, mag: function, add: function }
+  # methods are something you call via the colon syntax, `obj:mag()`
+  # that puts `obj` as the first argument (`self`, in this case)
+  fn mag(self: Point) self.x * self.x + self.y * self.y
+  fn add(self: Point, other: Point) -> Point {
+    x = self.x + other.x,
+    y = self.y + other.y,
+    mag = mag,
+    add = add,
   }
 
-  const p1 = Point.new(3, 4)
-  const p2 = Point.new(1, 2)
-  const p3 = p1:add(p2)
+  let p1: Point = { x = 3, y = 4, mag = mag, add = add }
+  let p2: Point = { x = 1, y = 2, mag = mag, add = add }
+  let p3 = p1:add(p2)
 
   print(p1.x, p1:mag(), p3.x, p3.y)
 
-  # another example: mutable counter
-  struct Counter {
-    count: number = 0,
-    fn inc(self) do self.count += 1 end,
-    fn val(self) self.count,
-  }
+  # another example!
+	#	  mutable counter
+  type Counter = { count: number, inc: function, val: function }
+  fn inc(self: Counter) do self.count += 1 end
+  fn val(self: Counter) self.count
 
-  const c = Counter{count = 10}
+  let c: Counter = { count = 10, inc = inc, val = val }
   c:inc()
   c:inc()
   print(c:val())
 end
 
-#* this is a public, documented struct *#
-pub struct Hi {
-  #* this field is documented *#
-  field: number,
-  #* this is a member function *#
-  fn new() Hi{},
-  #* 
-  and this is a method
-  here's a usage example for it
-  ```
-  let o = Hi{field = 10}
-  o:get_field()
-  # => 10
-  ```
-  *#
-  fn get_field(self: Hi) self.field
+#* this is a public, documented table factory *#
+pub fn Hi(field) {
+  field = field,
+  get_field = fn(self) self.field
 }
 
-# methods: calling with :syntax like lua
+const t = Hi("hi")
+
+# methods;
+#		calling with :syntax like lua
+#   calling methods with obj:method(args) passes obj as first arg
+#   same as obj.method(obj, args)
 fn methods() do
   print("\nmethods")
 
-  # call methods with : syntax - obj:method(args) passes obj as first arg
-  # same as obj.method(obj, args)
 
-  struct MethodsCounter {
-    count: number = 0,
-    fn inc(self) do self.count += 1 end,
-    fn get(self) self.count,
-  }
+  type MethodsCounter = { count: number, inc: function, get: function }
+  fn inc(self: MethodsCounter) do self.count += 1 end
+  fn get(self: MethodsCounter) self.count
 
-  const c = MethodsCounter{count = 5}
+  let c: MethodsCounter = { count = 5, inc = inc, get = get }
   print(c:get())
   c:inc()
   print(c:get())
 
-  # method chaining works nicely with pipes
+  # method chaining works neatly with pipes
   const result = c
-    |> _:get()
+    :get()
     |> fn(x) x * 2
 
   print(result)
@@ -520,7 +511,7 @@ fn main() do
   tuples()
   pipes()
   error_handling()
-  structs()
+  tables()
   methods()
   fibers()
   nonblocking()

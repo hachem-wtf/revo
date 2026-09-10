@@ -10,8 +10,7 @@ const type_serde = @import("type_serde.zig");
 /// ~ record type for the import binding & resolved type aliases
 /// ~ pub fn bindings get signature types (dep generics scoped correctly)
 /// ~ pub consts get literal-inferred types (or any)
-/// ~ pub structs get struct types, pub re-exports get any
-///   (really dont care about this one since structs will go anyways)
+/// ~ pub re-exports get any
 /// ~ non pub items are skipped
 ///
 /// ~ type aliases are compile-time only (not values)
@@ -186,10 +185,6 @@ fn moduleExportInto(mctx: *ModuleCtx, node: *const ast.Node, out: *std.ArrayList
                         .field_type = types.inferExprType(mctx, b.value),
                     });
                 },
-                .struct_def => |def| try out.append(alloc, .{
-                    .name = def.name,
-                    .field_type = .{ .tag = .{ .struct_type = def.name } },
-                }),
                 // type aliases are compile-time only so skip them
                 else => {},
             }

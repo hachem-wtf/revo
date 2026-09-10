@@ -426,8 +426,6 @@ pub const Table = struct {
             .function => a.asFunction().? == b.asFunction().?,
             .table => a.asTable().? == b.asTable().?,
             .tuple => compare(vm, a, b) == .eq,
-            .struct_val => a.asStructVal().? == b.asStructVal().?,
-            .struct_type => a.asStructType().? == b.asStructType().?,
             .foreign => a.asForeign().? == b.asForeign().?,
         };
     }

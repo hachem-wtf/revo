@@ -48,6 +48,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - `fs.exists?` returns plain `bool` instead of `!bool`
     - `fs.touch(path)`, `fs.copy(src, dst)`
 
+### Removed
+
+- struct type, `struct Name { ... }`, is gone
+  `struct` is a plain identifier again
+  use tables with closures instead: `{ name = "ana", greet = fn(self) ... }`
+
 ### Changed
 
 - type-to-string rendering is unified

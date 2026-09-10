@@ -566,12 +566,6 @@ inline fn execFiberDispatch(
         .table_set => {
             const table_value = regRead(regs, base, instr.a);
             const key = regRead(regs, base, instr.b);
-            if (key.asAtom()) |atom| {
-                if (try self.setStructField(table_value, atom, regRead(regs, base, instr.c))) {
-                    if (!fetchNext(fiber, &instr)) break :dispatch;
-                    continue :dispatch instr.op;
-                }
-            }
             const t_id = table_value.asTable() orelse
                 return self.typeError("table", table_value);
             const t = try self.tableFast(t_id);
@@ -607,10 +601,6 @@ inline fn execFiberDispatch(
         },
         .table_set_atom => {
             const table_value = regRead(regs, base, instr.a);
-            if (try self.setStructField(table_value, instr.bx, regRead(regs, base, instr.c))) {
-                if (!fetchNext(fiber, &instr)) break :dispatch;
-                continue :dispatch instr.op;
-            }
             const t_id = table_value.asTable() orelse
                 return self.typeError("table", table_value);
             const t = try self.tableFast(t_id);
@@ -696,55 +686,6 @@ inline fn execFiberDispatch(
                 );
 
             regWrite(regs, base, instr.a, t.items[instr.bx]);
-
-            if (!fetchNext(fiber, &instr)) break :dispatch;
-            continue :dispatch instr.op;
-        },
-        .struct_init => {
-            const type_id: revo.StructTypeID = instr.bx;
-            const instance_id = self.structInitInstance(
-                type_id,
-                regRead(regs, base, instr.b),
-            ) catch |e| return self.evalFailure(e);
-            regWrite(regs, base, instr.a, Data.new.structVal(instance_id));
-
-            if (!fetchNext(fiber, &instr)) break :dispatch;
-            continue :dispatch instr.op;
-        },
-        .struct_set_method => {
-            const type_val = regRead(regs, base, instr.a);
-            const type_id = type_val.asStructType() orelse
-                return self.typeError("struct type", type_val);
-            const name_atom_data = regRead(regs, base, instr.b);
-            const name_atom = name_atom_data.asAtom() orelse
-                return self.typeError("atom for method name", name_atom_data);
-            const method = regRead(regs, base, instr.c);
-            const desc = self.struct_types.getType(type_id) orelse
-                return self.fail(error.TypeError, "struct type not found", .{});
-            try desc.methods.put(self.stringValue(name_atom), method);
-            self.structCacheInvalidate(type_id);
-
-            if (!fetchNext(fiber, &instr)) break :dispatch;
-            continue :dispatch instr.op;
-        },
-        .struct_get_offset => {
-            const object = regRead(regs, base, instr.b);
-            const instance_id = object.asStructVal() orelse
-                return self.typeError("struct instance", object);
-            const instance = self.structGetInstance(instance_id) catch return self.evalFailure(error.Panic);
-            regWrite(regs, base, instr.a, instance.get(instr.bx));
-
-            if (!fetchNext(fiber, &instr)) break :dispatch;
-            continue :dispatch instr.op;
-        },
-        .struct_set_offset => {
-            const object = regRead(regs, base, instr.a);
-            const instance_id = object.asStructVal() orelse
-                return self.typeError("struct instance", object);
-            const instance = self.structGetInstance(instance_id) catch return self.evalFailure(error.Panic);
-            const value = regRead(regs, base, instr.c);
-            instance.set(instr.bx, value);
-            regWrite(regs, base, instr.a, Data.new.structVal(instance_id));
 
             if (!fetchNext(fiber, &instr)) break :dispatch;
             continue :dispatch instr.op;
@@ -1407,8 +1348,6 @@ noinline fn execCallField(self: *VM, regs: []Data, base: usize, instr: Instructi
                 self.icacheInsert(pc, t_id, t.ic_version, t.gen, key, resolved.value);
                 break :blk resolved;
             }
-        } else if (self.structCacheGet(object, key)) |value| {
-            break :blk VM.FieldLookup{ .value = value, .from_meta = false };
         } else if (try self.resolveField(object, key, instr.a)) |resolved| {
             break :blk resolved;
         }

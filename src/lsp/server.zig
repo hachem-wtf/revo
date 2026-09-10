@@ -379,7 +379,6 @@ const Handler = struct {
                     .binding => .Variable,
                     .function, .macro => .Function,
                     .param => .Variable,
-                    .struct_type => .Struct,
                     .type_alias => .Class,
                 },
                 .location = .{

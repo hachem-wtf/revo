@@ -220,13 +220,6 @@ pub const Head = struct {
     target_name: ?[]const u8 = null,
 };
 
-/// separate from the doc text so renderers can nest it under the struct entry
-pub const FieldSpec = struct {
-    name: []const u8,
-    type_text: []const u8 = "",
-    doc: []const u8 = "",
-};
-
 pub const FnSpec = struct {
     name: []const u8,
     /// display only, never parsed
@@ -241,8 +234,6 @@ pub const FnSpec = struct {
     variadic: bool = false,
     /// a plain value binding (`const width = 80`), not callable
     is_value: bool = false,
-    /// documented fields when this spec describes a struct
-    fields: []const FieldSpec = &.{},
     /// when set, the metatable key is this core atom (e.g. `__index`)
     /// instead of `internAtom(name)`. only `__index` uses it today
     core_key: ?revo.core_atoms = null,
@@ -269,13 +260,6 @@ pub const FnSpec = struct {
         if (self.ret) |r| revo.lang.type_serde.freeTypeExpr(alloc, r);
         alloc.free(self.doc);
         if (self.default_values.len > 0) alloc.free(self.default_values);
-
-        for (self.fields) |fl| {
-            alloc.free(fl.name);
-            alloc.free(fl.type_text);
-            alloc.free(fl.doc);
-        }
-        alloc.free(self.fields);
     }
 };
 
@@ -334,43 +318,6 @@ pub fn collectSpecs(alloc: std.mem.Allocator, node: *const revo.lang.Node, iface
                 } else {
                     try specs.append(alloc, try specFromConst(alloc, b.target.expr.ident, doc));
                 }
-            },
-            .struct_def => |s| {
-                if (iface) continue;
-                if (d.doc != null) try specs.append(alloc, try specFromStruct(alloc, s, d.doc.?));
-                // documented struct fns become method specs under the type
-                for (s.items) |si| switch (si) {
-                    .binding => |b| {
-                        const bdoc = b.doc orelse continue;
-                        if (b.target.expr != .ident) continue;
-                        var v = b.value;
-                        while (v.expr == .decl) v = v.expr.decl.inner;
-                        if (v.expr != .fn_expr) continue;
-                        const f = v.expr.fn_expr;
-                        const head_text = try std.fmt.allocPrint(
-                            alloc,
-                            "{s}:{s}",
-                            .{ s.name, b.target.expr.ident },
-                        );
-                        defer alloc.free(head_text);
-                        try specs.append(alloc, try specFromFn(
-                            alloc,
-                            head_text,
-                            head_text,
-                            .{
-                                .kind = .method,
-                                .target = root.typeFromName(s.name),
-                                .target_name = s.name,
-                            },
-                            &.{},
-                            f.params,
-                            f.return_type,
-                            bdoc,
-                            false,
-                        ));
-                    },
-                    .field => {},
-                };
             },
             else => {},
         }
@@ -498,42 +445,6 @@ pub fn specFromDecl(alloc: std.mem.Allocator, alias: ast.TypeAlias, doc: ?[]cons
     const fn_type = alias.type_expr.kind.function;
 
     return specFromFn(alloc, name, head_text, head, alias.declare_tps, fn_type.params, fn_type.return_type, doc orelse alias.doc, strict);
-}
-
-fn specFromStruct(alloc: std.mem.Allocator, s: anytype, doc: []const u8) !FnSpec {
-    var fields: std.ArrayList(FieldSpec) = .empty;
-    errdefer fields.deinit(alloc);
-
-    for (s.items) |item| {
-        switch (item) {
-            .field => |f| {
-                const fdoc = f.doc orelse continue;
-                var type_buf = std.Io.Writer.Allocating.init(alloc);
-                defer type_buf.deinit();
-                if (f.type_name) |tn| try revo.lang.type_serde.printTypeExpr(tn, &type_buf.writer);
-                try fields.append(alloc, .{
-                    .name = try alloc.dupe(u8, f.name),
-                    .type_text = try alloc.dupe(u8, type_buf.written()),
-                    .doc = try alloc.dupe(u8, fdoc),
-                });
-            },
-            // struct fns ride along as method specs via their binding docs
-            .binding => {},
-        }
-    }
-
-    return .{
-        .name = try alloc.dupe(u8, s.name),
-        .sig = try alloc.dupe(u8, s.name),
-        .head = .{ .kind = .global },
-        .type_params = &.{},
-        .params = &.{},
-        .ret = null,
-        .doc = try alloc.dupe(u8, doc),
-        .is_value = true,
-        .fields = try fields.toOwnedSlice(alloc),
-        .f = undefined,
-    };
 }
 
 /// shared assembly: params, sig text, doc normalization, core key. `strict`

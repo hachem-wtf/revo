@@ -113,8 +113,6 @@ fn writeCsvValue(data: Data, vm: *VM, writer: *Writer, nested: bool) anyerror!vo
             }
             if (nested) try writer.terminateRecord();
         },
-        .struct_val => return error.UnsupportedCsvValue,
-        .struct_type => return error.UnsupportedCsvValue,
         .function => return error.UnsupportedCsvValue,
         .foreign => return error.UnsupportedCsvValue,
     }

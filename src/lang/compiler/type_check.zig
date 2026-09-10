@@ -146,13 +146,6 @@ pub fn inferCallReturnType(
 
 pub fn inferFieldType(self: *Compiler, object: *const Node, name: []const u8) TypeInfo {
     return switch (inferExprType(self, object).tag) {
-        .struct_type => |struct_name| blk: {
-            const layout = self.struct_layouts.get(struct_name) orelse break :blk .{ .tag = .any };
-            for (layout) |f| {
-                if (std.mem.eql(u8, f.name, name)) break :blk f.field_type;
-            }
-            break :blk .{ .tag = .any };
-        },
         // `t.name` where t: { name: string } infers string
         .table => |tbl| blk: {
             if (tbl.fields) |fields| {

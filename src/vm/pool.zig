@@ -1,4 +1,4 @@
-//! shared machinery for the GC object pools (tables, tuples, functions, upvalues, struct instances)
+//! shared machinery for the GC object pools (tables, tuples, functions, upvalues)
 //!
 //! each pool is an append-only ArrayList whose slots never move, so ids stay stable
 //! freed slots are reused through a free list sweeping

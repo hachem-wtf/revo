@@ -14,13 +14,9 @@
 
 # scalar binds & coercion
 
-struct Asdf {
-  name = "me",
-  age = 21,
-
-  fn get_age(self) self.age,
-}
-let x = Asdf{}
+type Someone = { name: string, age: number, get_age: function }
+fn get_age(self: Asdf) self.age
+let x: Someone = { name = "me", age = 21, get_age = get_age }
 
 let acc = 0
 
@@ -77,10 +73,9 @@ pick((:err, :Boom))
 
 # hi()
 
-# typed bindings: int literal inferred as int
+# typed bindings: number literal inferred as number
 let x: int = 42
-# let bad_int: int = "hello"      # type mismatch: expected int, got string
-# let bad_float: number = "world"  # type mismatch: expected number, got string
+# let bad_int: int = "hello"      # type mismatch: expected number, got string
 
 # typed bindings: float literal inferred as number
 let y: number = 3.14
@@ -162,33 +157,29 @@ fn zero[T]() -> T
 let z = zero[int]()              # T=int, returns int 0
 
 
-# structs & field validation
-# > struct fields use `number` at runtime (int/float distinction is compile-time only)
+# tables & field validation
+# > table fields use `number` at runtime
 
-struct Point {
-    x: number = 0,
-    y: number = 0,
-    fn distance(self) do
-        # math not available yet, just return x + y as demo
-        self.x + self.y
-    end,
-}
+type Point = { x: number, y: number }
 
-# create typed struct instance & modify fields
-let p: Point = Point { x = 10, y = 20 }
-let px = p.x           # typed struct field access: emits struct_get_offset (fast)
+# create typed table & modify fields
+let p: Point = { x = 10, y = 20 }
+
+let px = p.x
 p.x = 100
-# p.x = "not a number" # field `x` on `Point` expected number, got string
-# let bad_point: Point = Point { x = 10, y = "oops" }
+# p.x = "not a number" # field `x` wants number, got string
+# let bad_point = { x = 10, y = "oops" }
 
-struct Person {
-    name: string = "",
-    age: number = 0,
-    fn greet(self) "hello, " ~ self.name,
-}
+type Person = { name: string, age: number }
 
-# create typed struct instance & modify fields
-let person: Person = Person { name = "alice", age = 30 }
+# create typed table & modify fields
+let person: Person = { name = "alice", age = 30 }
+
 let pname = person.name
-# person.name = 42 # field `name` on `Person` expected string, got number
-# let bad_person: Person = Person { name = 1, age = 30 }
+# person.name = 42 # field `name` wants string, got number
+
+# associated methods are done via metatables
+person:set_meta({
+	fn get_name(self: Person) -> string
+		self.name
+})

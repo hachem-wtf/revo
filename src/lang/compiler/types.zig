@@ -48,7 +48,6 @@ pub const TypeInfo = struct {
             // per-field types for `{ name: string }`; null = untyped map
             fields: ?[]const RecordField = null,
         },
-        struct_type: []const u8,
         function: *const FunctionSignature,
         any,
         never,
@@ -61,7 +60,6 @@ pub const TypeInfo = struct {
             .number => other.tag == .number,
             .string => other.tag == .string,
             .atom => |a| if (other.tag == .atom) std.mem.eql(u8, ast.atomName(a), ast.atomName(other.tag.atom)) else false,
-            .struct_type => |s| if (other.tag == .struct_type) std.mem.eql(u8, s, other.tag.struct_type) else false,
             .tuple => |ts| if (other.tag == .tuple) blk: {
                 if (ts.len != other.tag.tuple.len) break :blk false;
                 for (ts, other.tag.tuple) |a, b| if (!eql(a, b)) break :blk false;
@@ -111,13 +109,6 @@ pub const TypeInfo = struct {
             .never => other.tag == .never,
         };
     }
-};
-
-pub const FieldDef = struct {
-    name: []const u8,
-    field_type: TypeInfo,
-    default_val: ?revo.memory.Data = null,
-    type_name: ?[]const u8 = null,
 };
 
 pub const FunctionSignature = struct {
@@ -177,7 +168,6 @@ pub fn clone(ti: TypeInfo, alloc: std.mem.Allocator) !TypeInfo {
     return switch (ti.tag) {
         .bool, .number, .string, .any, .never => ti,
         .atom => |s| .{ .tag = .{ .atom = try alloc.dupe(u8, s) } },
-        .struct_type => |s| .{ .tag = .{ .struct_type = try alloc.dupe(u8, s) } },
         .type_var => |s| .{ .tag = .{ .type_var = try alloc.dupe(u8, s) } },
         .tuple => |items| {
             const owned = try alloc.alloc(TypeInfo, items.len);
@@ -251,7 +241,7 @@ pub fn deinitType(ti: *TypeInfo, alloc: std.mem.Allocator) void {
     if (ti.doc) |d| alloc.free(d);
     switch (ti.tag) {
         .bool, .number, .string, .any, .never => {},
-        .atom, .struct_type, .type_var => |s| if (s.len > 0) alloc.free(s),
+        .atom, .type_var => |s| if (s.len > 0) alloc.free(s),
         .tuple => |items| {
             for (items) |*item| deinitType(@constCast(item), alloc);
             alloc.free(items);
@@ -545,7 +535,7 @@ pub fn resolveTypeName(ctx: anytype, name: []const u8) TypeInfo {
     if (type_name_map.get(name)) |res| return res;
     if (name.len > 0 and name[0] == ':') return .{ .tag = .{ .atom = name } };
     if (ctx.resolveTypeAlias(name)) |aliased| return aliased;
-    return .{ .tag = .{ .struct_type = name } };
+    return .{ .tag = .any };
 }
 
 pub fn inferExprType(ctx: anytype, node: *const ast.Node) TypeInfo {
@@ -594,7 +584,6 @@ pub fn inferExprType(ctx: anytype, node: *const ast.Node) TypeInfo {
         .match_expr => |v| inferMatchType(ctx, v.subject, v.arms),
         .range_literal, .slice_literal => .{ .tag = .number },
         .assign_expr, .decl, .binding, .tuple_pattern, .type_alias => .{ .tag = .any },
-        .struct_def => |def| .{ .tag = .{ .struct_type = def.name } },
     };
 }
 
@@ -1168,54 +1157,6 @@ test "atom union alias accepts literal and alias value in calls" {
     , "two");
 }
 
-test "typed struct field access" {
-    var vm = try VM.init(testRuntime());
-    defer vm.deinit();
-
-    const built = try lang.build(&vm, .{
-        .text =
-        \\ struct User {
-        \\     name: string = "",
-        \\     age: num = 0,
-        \\ }
-        \\ let u: User = User { name = "alice", age = 30 }
-        \\ u.age
-        ,
-    }, .{});
-    try std.testing.expect(built == .ok);
-    defer vm.runtime.alloc.free(built.ok.instructions);
-    defer vm.runtime.alloc.free(built.ok.spans);
-
-    var saw_get = false;
-    for (built.ok.instructions) |inst| {
-        if (inst.op == .struct_get_offset) saw_get = true;
-    }
-    try std.testing.expect(saw_get);
-}
-
-test "typed struct field assignment rejects wrong type" {
-    try t.expectCompileError(
-        \\ struct User {
-        \\     name: string = "",
-        \\     age: num = 0,
-        \\ }
-        \\ let u: User = User { name = "alice", age = 30 }
-        \\ u.name = 42
-    , .ParseError);
-}
-
-test "typed struct field assignment accepts correct type" {
-    try t.topNumber(
-        \\ struct User {
-        \\     name: string = "",
-        \\     age: num = 0,
-        \\ }
-        \\ let u: User = User { name = "alice", age = 30 }
-        \\ u.age = 42
-        \\ u.age
-    , 42);
-}
-
 test "binary num + num emits add" {
     var vm = try VM.init(testRuntime());
     defer vm.deinit();
@@ -1659,17 +1600,6 @@ test "tuple slice empty result" {
         \\ let t = (1, 2, 3)
         \\ len(t[2..2])
     , 0);
-}
-
-//
-// struct with nested struct fields
-//
-test "struct field access returns correct type" {
-    try t.topNumber(
-        \\ struct User { name: string = "", age: num = 0 }
-        \\ let u = User { name = "alice", age = 30 }
-        \\ u.age + 12
-    , 42);
 }
 
 //

@@ -493,7 +493,7 @@ fn parsePrefix(self: *Parser) anyerror!*Node {
         .hash => self.allocExpr(token.span(), .{ .hash = token.text[1..] }),
         .doc_comment => self.parseDocAttr(token),
         .ident => self.allocExpr(token.span(), .{ .ident = token.text }),
-        .kw_const, .kw_global, .kw_let, .kw_struct, .kw_test, .kw_suite, .kw_declare => self.parseDecl(token),
+        .kw_const, .kw_global, .kw_let, .kw_test, .kw_suite, .kw_declare => self.parseDecl(token),
         .kw_proc => self.parseProc(token),
         .kw_fn => self.parseFnWithBodyMin(token, 0),
         .minus => self.parseUnary(.negate, 60, token),
@@ -880,13 +880,6 @@ fn parseDecl(self: *Parser, start: Token) anyerror!*Node {
         .kw_fn => {
             return try self.parseFnWithBodyMin(start, 0);
         },
-        .kw_struct => {
-            const struct_def = try self.parseStruct(start);
-            return self.allocExpr(
-                start.span(),
-                .{ .decl = .{ .inner = struct_def, .kind = ast.DeclKind.struct_decl } },
-            );
-        },
         .kw_test => blk: {
             var skip = false;
             if (self.match(.slash)) {
@@ -1132,7 +1125,6 @@ fn parsePubPrefix(self: *Parser, _: Token) anyerror!*Node {
         .kw_const,
         .kw_let,
         .kw_fn,
-        .kw_struct,
         .kw_test,
         .kw_suite,
         .kw_proc,
@@ -1314,90 +1306,6 @@ fn parseProc(self: *Parser, start: Token) anyerror!*Node {
     }
     // neither colon, dot, nor lparen
     return error.UnexpectedToken;
-}
-
-fn parseStruct(self: *Parser, start: Token) anyerror!*Node {
-    const name = try self.expectIdent();
-    _ = try self.expect(.lsquiggly);
-
-    var items = try std.ArrayList(ast.StructItem).initCapacity(self.alloc, 4);
-    errdefer {
-        for (items.items) |item| {
-            switch (item) {
-                .binding => {},
-                .field => {},
-            }
-        }
-        items.deinit(self.alloc);
-    }
-    var end_span = name.span();
-
-    while (!self.check(.rsquiggly) and !self.check(.eof)) {
-        // pending doc comment attaches to whatever item comes next
-        var pending_doc: ?[]const u8 = null;
-        if (self.check(.doc_comment)) {
-            const doc_token = self.advance();
-            pending_doc = std.mem.trim(u8, doc_token.text, " \t\n\r");
-        }
-
-        // branch const/let
-        if (self.check(.kw_const) or self.check(.kw_let)) {
-            const binding_start = self.advance();
-            const binding_expr = switch (binding_start.type) {
-                .kw_const => try self.parseBinding(.con, binding_start),
-                .kw_let => try self.parseBinding(.let, binding_start),
-                else => return error.UnexpectedToken,
-            };
-            end_span = binding_expr.span;
-            switch (binding_expr.expr) {
-                .decl => |decl| switch (decl.inner.expr) {
-                    .binding => |*binding| {
-                        if (pending_doc) |doc| binding.doc = doc;
-                        try items.append(self.alloc, .{ .binding = binding.* });
-                    },
-                    else => return error.UnexpectedToken,
-                },
-                else => return error.UnexpectedToken,
-            }
-            if (!self.match(.comma)) break;
-            continue;
-        }
-
-        // branch fn shorthand: fn name(params) body
-        if (self.check(.kw_fn)) {
-            const fn_start = self.advance();
-            const fn_name = try self.expectIdent();
-            const fn_expr = try self.parseFnWithBodyMin(fn_start, 0);
-            end_span = fn_expr.span;
-            const target = try self.allocExpr(fn_name.span(), .{ .ident = fn_name.text });
-            const binding: ast.Binding = .{
-                .target = target,
-                .value = fn_expr,
-                .doc = pending_doc,
-            };
-            try items.append(self.alloc, .{ .binding = binding });
-            if (!self.match(.comma)) break;
-            continue;
-        }
-
-        // branch field: name: type = default
-        const field_name = try self.expectIdent();
-        var field: ast.StructField = .{ .name = field_name.text, .name_span = field_name.span(), .doc = pending_doc };
-        if (self.match(.colon)) field.type_name = try self.parseTypeExpr();
-        if (self.match(.assign)) field.default_value = try self.parseStatementExpression(0);
-        end_span = if (field.default_value) |value| value.span else field_name.span();
-        try items.append(self.alloc, .{ .field = field });
-        if (!self.match(.comma)) break;
-    }
-
-    const close = try self.expect(.rsquiggly);
-    return self.allocExpr(Span.merge(start.span(), if (items.items.len == 0) close.span() else end_span), .{
-        .struct_def = .{
-            .name = name.text,
-            .name_span = name.span(),
-            .items = try items.toOwnedSlice(self.alloc),
-        },
-    });
 }
 
 /// do expr end
@@ -2159,7 +2067,7 @@ const call_stmt_boundary_tokens = makeTokenSet(&.{
 
 const expr_start_tokens = makeTokenSet(&.{
     .number,      .string,       .multiline_string, .hash,      .ident,
-    .kw_const,    .kw_let,       .kw_macro,         .kw_struct, .minus,
+    .kw_const,    .kw_let,       .kw_macro,         .minus,
     .kw_not,      .pipe_forward, .lparen,           .kw_fn,     .kw_if,
     .kw_unless,   .kw_match,     .kw_do,            .kw_loop,   .kw_break,
     .kw_continue, .kw_return,    .kw_import,        .kw_spawn,  .kw_join,
@@ -2470,18 +2378,6 @@ test "parses pub proc" {
     try std.testing.expect(root.expr.decl.pub_);
     try std.testing.expect(root.expr.decl.inner.expr == .proc_macro);
     try std.testing.expectEqualStrings("inc!", root.expr.decl.inner.expr.proc_macro.name);
-}
-
-test "parses pub struct with pub_ flag" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const alloc = arena.allocator();
-
-    const tokens = try lexer.lexAt(alloc, "pub struct User { name: string }", .{});
-    const root = try parseTokens(alloc, tokens);
-    try std.testing.expect(root.expr == .decl);
-    try std.testing.expect(root.expr.decl.pub_);
-    try std.testing.expect(root.expr.decl.kind == .struct_decl);
 }
 
 test "parses pub type with pub_ flag" {

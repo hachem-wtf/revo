@@ -173,24 +173,10 @@ pub const TableEntry = struct {
     value: *Node,
 };
 
-pub const StructField = struct {
-    name: []const u8,
-    name_span: Span,
-    type_name: ?*TypeExpr = null,
-    default_value: ?*Node = null,
-    doc: ?[]const u8 = null,
-};
-
-pub const StructItem = union(enum) {
-    field: StructField,
-    binding: Binding,
-};
-
 pub const DeclKind = enum {
     con,
     let,
     global,
-    struct_decl,
     test_decl,
     suite_decl,
     type_alias_decl,
@@ -307,7 +293,6 @@ pub const Expr = union(enum) {
     tuple: []*Node,
     tuple_pattern: []*Node,
     table: []TableEntry,
-    struct_def: struct { name: []const u8, name_span: Span, items: []StructItem },
     proc_macro: struct { name: []const u8, param: FnParam, body: *Node },
     quasiquote: Quasiquote,
     try_expr: *Node, // expr?
@@ -635,30 +620,6 @@ pub const Node = struct {
                 if (cb.is_macro) try writer.writeAll(" macro");
                 try sep(writer, depth, 1);
                 try cb.expr.printAt(writer, child(depth));
-                try close(writer, depth);
-            },
-            .struct_def => |def| {
-                try writer.print("(struct {s}", .{def.name});
-                for (def.items) |item| {
-                    try sep(writer, depth, 1);
-                    switch (item) {
-                        .field => |field| {
-                            try writer.print("(field {s}", .{field.name});
-                            if (field.type_name) |t| {
-                                try writer.writeByte(':');
-                                try type_serde.printTypeExpr(t, writer);
-                            }
-                            if (field.default_value) |value| {
-                                try sep(writer, child(depth), 1);
-                                try value.printAt(writer, child(child(depth)));
-                                try close(writer, child(depth));
-                            } else {
-                                try writer.writeByte(')');
-                            }
-                        },
-                        .binding => |binding| try binding.printAt(writer, "entry", child(depth)),
-                    }
-                }
                 try close(writer, depth);
             },
             .block => |exprs| try printNodeList(writer, "block", exprs, depth),
@@ -1033,14 +994,6 @@ pub fn walkAST(comptime Visitor: type, visitor: *Visitor, node: *const Node) voi
                         if (@hasField(Visitor, "found") and visitor.found) return;
                         visitor.visit(arm.then);
                     },
-                    []StructItem => for (value) |item| {
-                        if (@hasField(Visitor, "found") and visitor.found) return;
-                        if (item == .binding) {
-                            visitor.visit(item.binding.value);
-                        } else if (item.field.default_value) |def| {
-                            visitor.visit(def);
-                        }
-                    },
                     []TableEntry => for (value) |entry| {
                         if (@hasField(Visitor, "found") and visitor.found) return;
                         if (entry.key) |key| visitor.visit(key);
@@ -1330,29 +1283,6 @@ pub fn walkExpr(
         .orelse_expr => |v| allocNode(allocator, expr.span, .{ .orelse_expr = .{
             .left = try ctx.walk(allocator, v.left, ctx),
             .right = try ctx.walk(allocator, v.right, ctx),
-        } }),
-        .struct_def => |v| allocNode(allocator, expr.span, .{ .struct_def = .{
-            .name = v.name,
-            .name_span = v.name_span,
-            .items = blk: {
-                var out = try std.ArrayList(StructItem).initCapacity(allocator, v.items.len);
-
-                for (v.items) |item| switch (item) {
-                    .binding => |b| try out.append(allocator, .{ .binding = .{
-                        .target = try ctx.walk(allocator, b.target, ctx),
-                        .type_name = b.type_name,
-                        .value = try ctx.walk(allocator, b.value, ctx),
-                        .mutable = b.mutable,
-                    } }),
-                    .field => |f| try out.append(allocator, .{ .field = .{
-                        .name = f.name,
-                        .name_span = f.name_span,
-                        .type_name = f.type_name,
-                        .default_value = if (f.default_value) |dv| try ctx.walk(allocator, dv, ctx) else null,
-                    } }),
-                };
-                break :blk try out.toOwnedSlice(allocator);
-            },
         } }),
         .test_block => |v| allocNode(allocator, expr.span, .{ .test_block = .{
             .name = v.name,

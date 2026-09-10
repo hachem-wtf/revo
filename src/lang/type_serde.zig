@@ -1,5 +1,5 @@
 //!
-//! welcome to our type serde
+//! welcome to type serde
 //!
 //! all type text conversion is here: text -> TypeExpr -> TypeInfo and back
 //! the two mirrors (parse/printTypeExpr, evalTypeExpr/toTypeExpr) must stay in sync
@@ -11,6 +11,7 @@
 //! type refs flow one way (here -> ast only)
 //! dont add comptime cross-refs
 //! same shape as the revo <-> vm cycle
+//!
 
 const std = @import("std");
 const ast = @import("ast.zig");
@@ -100,7 +101,7 @@ const Parser = struct {
     }
 
     /// atomic type expression with no union operators
-    /// ~ ident (name):      "number", "string", "MyStruct"
+    /// ~ ident (name):      "number", "string", custom alias
     /// ~ a.T (qualified):   module a's alias T
     /// ~ ident? (optional): "number?" -> union_of(named("number"), atom(":nil"))
     /// ~ ident<T>:          "table<int>", "table<string, int>"
@@ -257,12 +258,12 @@ fn flattenUnion(alloc: std.mem.Allocator, variants: *std.ArrayList(*ast.TypeExpr
 /// ctx must support .alloc, .isTypeParam(name) -> bool, and .resolveTypeAlias(name) -> ?TypeInfo
 pub fn evalTypeExpr(ctx: anytype, te: *const ast.TypeExpr) !TypeInfo {
     switch (te.kind) {
-        // "number" -> int (from type_name_map), "MyStruct" -> struct_type
+        // "number" -> int (from type_name_map), unknown names -> any
         .named => |name| {
             if (ctx.isTypeParam(name)) return .{ .tag = .{ .type_var = name } };
             if (types.type_name_map.get(name)) |res| return res;
             if (ctx.resolveTypeAlias(name)) |aliased| return aliased;
-            return .{ .tag = .{ .struct_type = name } };
+            return .{ .tag = .any };
         },
         // "a.T" -> module a's alias T, or any when unresolvable (the
         // compiler has no dep IO, so it always lands here; semantic
@@ -378,7 +379,7 @@ pub fn printType(ti: TypeInfo, writer: *std.Io.Writer, opts: PrintOptions) !void
                 try writer.writeAll(s)
             else
                 try writer.print(":{s}", .{s}),
-            .struct_type, .type_var => |s| try writer.writeAll(s),
+            .type_var => |s| try writer.writeAll(s),
             .table => try writer.writeAll("table"),
             .function => try writer.writeAll("function"),
             // all these are spelled out so a future payload-carrying tag breaks
@@ -389,7 +390,6 @@ pub fn printType(ti: TypeInfo, writer: *std.Io.Writer, opts: PrintOptions) !void
     }
     switch (ti.tag) {
         .type_var => |n| try writer.writeAll(n),
-        .struct_type => |n| try writer.writeAll(n),
         // empty atom payload is the "any atom" sentinel
         .atom => |s| if (s.len == 0) try writer.writeAll("atom") else try writer.print(":{s}", .{ast.atomName(s)}),
         // empty tuple is the "any tuple" sentinel

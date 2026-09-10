@@ -63,7 +63,7 @@ errors at any step surface as `lang.Error` variants (`parse`/`expand`/`semantic`
 one pass over the expanded ast, emitting into a pointer-based ir.
 `IrInst` operands are `.inst` pointers (data flow by pointer rather than register number), which is what makes the passes below ok. registers come from a stack (`state.zig`, `pushRegister`/`popRegister`), locals are per-function slots, upvalues resolve recursively by name, and every inst carries `fn_depth`
 
-`type_check` infers operand types to pick specialized opcodes (like `add_int` for `add`), `types.zig` is the type system, `flow.zig` lowers control flow, `values.zig` lowers bindings, assigns, patterns, struct/table literals, etc.
+`type_check` infers operand types to pick specialized opcodes (like `add_int` for `add`), `types.zig` is the type system, `flow.zig` lowers control flow, `values.zig` lowers bindings, assigns, patterns, table literals, etc.
 the root compiles as `__main` plus `call` + `halt` (`compileRoot`)
 
 ... `finishArtifact` runs four passes, then lowers
@@ -86,7 +86,7 @@ the root compiles as `__main` plus `call` + `halt` (`compileRoot`)
 
 ~ `pool.zig` + `gc.zig` - append-only object pools with free-list reuse, mark-sweep with finalizers, collection triggers at the smaller of an 8mb nursery budget and the adaptive `gc_threshold` (live bytes * `gc_pause_factor`). the name is a lie (for now), it has no generational split
 
-~ `interner.zig` - strings/atoms to ids; `lookup.zig` - field/method resolution through metatables, with inline caches (2-way table `ICacheEntry`, per-(struct type, atom) `StructCacheEntry`).
+~ `interner.zig` - strings/atoms to ids; `lookup.zig` - field/method resolution through metatables, with a 2-way table `ICacheEntry`.
 the `2-way` here is close-ish to the the one described in [the Holzle/Chambers/Ungar paper](https://bibliography.selflanguage.org/_static/pics.pdf)
 
 ~ `bytecode.zig` - on-disk `.rvo` format. always little-endian; `debug.zig` - disassembly + `EvalFailure` reports

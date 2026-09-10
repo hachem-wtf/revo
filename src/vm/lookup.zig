@@ -67,41 +67,6 @@ pub fn resolveField(self: *VM, object: Data, key: Data, result_reg: ?@import("op
             if (instance_mt_id != null and instance_mt_id.? == type_mt_id) return null;
             return resolveViaMetatable(self, object, key, type_mt_id, result_reg);
         },
-        .struct_val => {
-            const instance_id = object.asStructVal().?;
-            const instance = self.struct_instances.get(instance_id) catch return null;
-            const desc = self.struct_types.getType(instance.type_id) orelse return null;
-
-            if (key.asAtom()) |atom| {
-                if (self.structCacheLookup(instance.type_id, atom)) |cached| {
-                    if (cached.is_method) {
-                        return .{ .value = cached.value, .from_meta = true };
-                    }
-                    return .{ .value = instance.fields[cached.offset], .from_meta = false };
-                }
-                // check methods first
-                if (desc.methods.get(self.stringValue(atom))) |method| {
-                    self.structCacheInsert(instance.type_id, atom, true, 0, method);
-                    return .{ .value = method, .from_meta = true };
-                }
-                if (desc.field_index.get(atom)) |i| {
-                    self.structCacheInsert(instance.type_id, atom, false, @intCast(i), Data.new.nil());
-                    return .{ .value = instance.fields[i], .from_meta = false };
-                }
-            }
-            return null;
-        },
-        .struct_type => {
-            const type_id = object.asStructType().?;
-            const desc = self.struct_types.getType(type_id) orelse return null;
-
-            if (key.asAtom()) |atom| {
-                if (desc.methods.get(self.stringValue(atom))) |method| {
-                    return .{ .value = method, .from_meta = true };
-                }
-            }
-            return null;
-        },
         .string => {
             const type_mt_id = self.metatables[@intFromEnum(mem.Type.string)] orelse return null;
             const mt = try self.tables.get(type_mt_id);

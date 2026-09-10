@@ -20,7 +20,6 @@ fn pubName(item: *Node) ?[]const u8 {
     return switch (item.expr) {
         .decl => |d| if (d.pub_) switch (d.inner.expr) {
             .binding => |b| if (b.target.expr == .ident) b.target.expr.ident else null,
-            .struct_def => |s| s.name,
             // type aliases are compile-time only, not runtime values
             // so they cannot be exported in the runtime exports table
             else => null,

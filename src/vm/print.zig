@@ -15,7 +15,7 @@ const color_brace = "\x1b[34m"; // table braces
 // metamethod chain that keeps producing brand=new values forever. this alone
 // doesnt catch true cycles gracefully (it just bails after printing
 // max_write_depth levels), so it's paired with the ancestor-stack cycle
-// detector below, which catches the common case (a table/tuple/struct that
+// detector below, which catches the common case (a table/tuple that
 // contains itself) immediately and cheaply
 threadlocal var write_depth: usize = 0;
 const max_write_depth: usize = 200;
@@ -32,7 +32,7 @@ const max_write_depth: usize = 200;
 // can't be confused for each other. this is not a "seen anywhere" set -
 // the same table referenced from two unrelated fields is fine and will be
 // printed twice; only an actual ancestor-of-itself trips it
-const ContainerKind = enum { table, tuple, struct_val };
+const ContainerKind = enum { table, tuple };
 const VisitEntry = struct { kind: ContainerKind, addr: usize };
 
 // sized off max_write_depth just to reuse one constant; pushVisiting below
@@ -157,47 +157,6 @@ pub fn writeData(self: Data, writer: *std.Io.Writer, vm: *revo.VM, mode: Data.Re
                 return;
             };
             tup.write(writer, vm, mode) catch try writer.writeAll("<tuple-unprintable>");
-        },
-        .struct_val => {
-            const instance_id = self.asStructVal().?;
-            const instance = vm.struct_instances.get(instance_id) catch {
-                try writer.writeAll("<dead-struct>");
-                return;
-            };
-            const desc = vm.struct_types.getType(instance.type_id) orelse {
-                try writer.writeAll("<unknown-struct>");
-                return;
-            };
-
-            const addr = @intFromPtr(instance);
-            if (isVisiting(.struct_val, addr)) {
-                try writer.writeAll("<circular>");
-                return;
-            }
-            if (!pushVisiting(.struct_val, addr)) {
-                try writer.writeAll("<max-depth-exceeded>");
-                return;
-            }
-            defer popVisiting();
-
-            try writer.writeAll(desc.name);
-            try writer.writeAll("{ ");
-            for (desc.fields, 0..) |f, i| {
-                if (i != 0) try writer.writeAll(", ");
-                try writer.writeAll(vm.stringValue(f.name_atom));
-                try writer.writeAll(" = ");
-                try writeData(instance.fields[i], writer, vm, mode);
-            }
-            try writer.writeAll(" }");
-        },
-        .struct_type => {
-            const type_id = self.asStructType().?;
-            const desc = vm.struct_types.getType(type_id) orelse {
-                try writer.writeAll("<unknown-type>");
-                return;
-            };
-            try writer.writeAll("#");
-            try writer.writeAll(desc.name);
         },
         .foreign => try writer.print("<foreign {*}>", .{self.asForeign().?}),
     }

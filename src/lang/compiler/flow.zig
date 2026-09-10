@@ -27,10 +27,12 @@ pub const VarStorage = union(enum) {
 fn normalizeLoopResult(self: *Compiler) !void {
     const body_result: Register = @intCast(self.active_registers - 1);
     const loop_result: Register = self.loop_stack.items[self.loop_stack.items.len - 1].result_reg;
+
     if (body_result != loop_result) {
         try self.spans.append(self.alloc, self.active_span);
         _ = try self.record(.move, &.{.{ .reg = body_result }}, true, loop_result, 0);
     }
+
     try self.regRelease();
 }
 
@@ -850,10 +852,13 @@ fn compileShortCircuit(self: *Compiler, left: *const Node, right: *const Node, s
     try self.compile(left, true);
     try self.regDupe();
     const short = try self.jump(short_op);
+
     try self.regRelease();
     const left_inst = try self.pop();
+
     try self.compile(right, true);
     const end = try self.jump(.jump);
+
     self.patchJump(short);
     self.patchJump(end);
     try self.value_stack.append(self.alloc, left_inst);

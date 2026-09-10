@@ -47,17 +47,6 @@ pub const ICacheEntry = struct {
     value: Data,
 };
 
-/// per-(struct type, atom) resolution cache: field offsets and methods are
-/// shared by every instance of a type, so the hashed name/atom lookups in
-/// resolveField only need to run once per access site
-pub const StructCacheEntry = struct {
-    type_id: usize = std.math.maxInt(usize),
-    atom: mem.AtomID = 0,
-    is_method: bool = false,
-    offset: usize = 0,
-    value: Data = Data.new.nil(),
-};
-
 // main loop: run runnable fibers, wake sleepers
 // wait for io/timers if needed
 
@@ -157,12 +146,10 @@ constants: std.ArrayList(Data),
 stdlib_globals: Globals,
 /// iface specs loaded at init; released by `deinit` through `api.freeLoadedSpecs`
 loaded_specs: []const []const revo.std_lib.api.FnSpec = &.{},
-tables: TablePool,
-tuples: TuplePool,
-functions: FunctionPool,
-struct_types: struct_mod.StructTypePool,
-struct_instances: struct_mod.StructInstancePool,
-strings: Interner,
+    tables: TablePool,
+    tuples: TuplePool,
+    functions: FunctionPool,
+    strings: Interner,
 atoms: std.StringHashMap(mem.AtomID),
 debug: DebugOptions = .{},
 globals: Globals,
@@ -171,7 +158,7 @@ module_dir: ?[]const u8,
 project_root: []const u8 = "",
 loading_stack: std.ArrayList([]const u8),
 
-/// indexed by @intFromEnum(mem.Type); tags are non-contiguous (0, 8-15)
+/// indexed by @intFromEnum(mem.Type); tags are non-contiguous (0, 8-13)
 metatables: [
     @as(usize, @intFromEnum(memory.Type.foreign)) + 1
 ]?mem.TableID = @splat(null),
@@ -212,11 +199,9 @@ icache: [2][256]ICacheEntry = @splat(
             .value = Data.new.nil(),
         },
     ),
-),
+    ),
 
-struct_cache: [512]StructCacheEntry = @splat(.{}),
-
-gc_mark_stack: std.ArrayList(MarkItem),
+    gc_mark_stack: std.ArrayList(MarkItem),
 gc_finalizers: std.AutoHashMap(mem.TableID, Data),
 gc_in_finalizer: bool = false,
 
@@ -226,7 +211,6 @@ const MarkItem = union(enum) {
     tuple: mem.TupleID,
     function: mem.FunctionID,
     upvalue: root.functions.UpvalueID,
-    struct_instance: struct_mod.StructInstanceID,
 };
 
 pub fn init(runtime: revo.Runtime) !VM {
@@ -244,8 +228,6 @@ pub fn init(runtime: revo.Runtime) !VM {
     errdefer tuples.deinit();
     var functions = try FunctionPool.init(rt.alloc);
     errdefer functions.deinit();
-    var struct_instances = try struct_mod.StructInstancePool.init(rt.alloc);
-    errdefer struct_instances.deinit();
     var strings = try Interner.init(rt.alloc);
     errdefer strings.deinit();
     var package_path = try std.ArrayList([]const u8).initCapacity(rt.alloc, 4);
@@ -264,8 +246,6 @@ pub fn init(runtime: revo.Runtime) !VM {
         .tables = tables,
         .tuples = tuples,
         .functions = functions,
-        .struct_types = struct_mod.StructTypePool.init(rt.alloc),
-        .struct_instances = struct_instances,
         .strings = strings,
         .atoms = std.StringHashMap(mem.AtomID).init(rt.alloc),
         .module_cache = ModuleCache.init(rt.alloc),
@@ -320,7 +300,6 @@ pub const pushMarkTable = vm_gc.pushMarkTable;
 pub const pushMarkTuple = vm_gc.pushMarkTuple;
 pub const pushMarkFunction = vm_gc.pushMarkFunction;
 pub const pushMarkUpvalue = vm_gc.pushMarkUpvalue;
-pub const pushMarkStructInstance = vm_gc.pushMarkStructInstance;
 
 pub fn deinit(self: *VM) void {
     self.clearProgramDebugInfo();
@@ -355,8 +334,6 @@ pub fn deinit(self: *VM) void {
     self.tables.deinit();
     self.tuples.deinit();
     self.functions.deinit();
-    self.struct_types.deinit();
-    self.struct_instances.deinit();
     self.strings.deinit();
     self.atoms.deinit();
 
@@ -569,48 +546,6 @@ pub inline fn icacheInsert(
     const set = (pc ^ table_id) & (self.icache[0].len - 1);
     self.icache[1][set] = self.icache[0][set];
     self.icache[0][set] = .{ .pc = pc, .table_id = table_id, .version = version, .gen = gen, .key = key, .value = value };
-}
-
-// direct-mapped struct field/method cache; set index = type_id ^ atom
-pub inline fn structCacheLookup(self: *VM, type_id: usize, atom: mem.AtomID) ?StructCacheEntry {
-    const entry = self.struct_cache[(type_id ^ atom) & (self.struct_cache.len - 1)];
-    if (entry.type_id == type_id and entry.atom == atom) return entry;
-    return null;
-}
-
-pub inline fn structCacheInsert(
-    self: *VM,
-    type_id: usize,
-    atom: mem.AtomID,
-    is_method: bool,
-    offset: usize,
-    value: Data,
-) void {
-    self.struct_cache[(type_id ^ atom) & (self.struct_cache.len - 1)] = .{
-        .type_id = type_id,
-        .atom = atom,
-        .is_method = is_method,
-        .offset = offset,
-        .value = value,
-    };
-}
-
-// inline fast path: resolve a cached struct field/method read on a struct instance.
-// identical to resolveField's struct_val cache-hit branch; misses fall through.
-pub inline fn structCacheGet(self: *VM, object: Data, key: Data) ?Data {
-    const instance_id = object.asStructVal() orelse return null;
-    const atom = key.asAtom() orelse return null;
-    const pool = &self.struct_instances;
-    if (instance_id >= pool.instances.items.len) return null;
-    const inst = pool.instances.items[instance_id] orelse return null;
-    const cached = self.structCacheLookup(inst.type_id, atom) orelse return null;
-    return if (cached.is_method) cached.value else inst.fields[cached.offset];
-}
-
-pub fn structCacheInvalidate(self: *VM, type_id: usize) void {
-    for (&self.struct_cache) |*entry| {
-        if (entry.type_id == type_id) entry.type_id = std.math.maxInt(usize);
-    }
 }
 
 pub fn internAtom(self: *VM, name: []const u8) !mem.AtomID {
@@ -1084,32 +1019,8 @@ pub fn evalFailure(self: *VM, err: EvalError) EvalFailure {
 
     var primary_span = if (info) |debug| self.spanAtPc(debug, current_pc) else null;
 
-    // struct ctor panics originate in generated wrapper code; prefer the user callsite
     if (kind == .Panic and self.panic_message != null) {
         if (self.panic_span) |span| primary_span = span;
-
-        const msg = self.panic_message.?;
-        const is_struct_panic =
-            std.mem.find(u8, msg, " for struct `") != null or
-            (std.mem.find(u8, msg, " on `") != null and
-                std.mem.find(u8, msg, " wants ") != null);
-
-        const top_is_non_module = blk: {
-            if (frames.len == 0) break :blk false;
-            if (frames[frames.len - 1].closure_id) |id| {
-                break :blk !std.mem.eql(u8, self.frameName(id), "<module>");
-            }
-            break :blk false;
-        };
-
-        if (is_struct_panic and top_is_non_module and
-            frames[frames.len - 1].call_site_pc != null and info != null)
-        {
-            primary_span = self.spanAtPc(
-                info orelse unreachable,
-                frames[frames.len - 1].call_site_pc orelse unreachable,
-            );
-        }
     }
 
     const message = if (kind == .Panic and self.panic_message != null)
@@ -1657,18 +1568,6 @@ pub fn callRegister(
         }
     }
 
-    // .struct_type callee is constructor
-    if (callee.isStructType()) {
-        const type_id = callee.asStructType().?;
-        return self.callStructConstructor(
-            type_id,
-            instr,
-            base,
-            callee_slot,
-            argc,
-        );
-    }
-
     // callee must be a function
     const func = switch (callee.tag()) {
         .function => try self.functions.get(
@@ -1698,240 +1597,6 @@ pub fn callRegister(
         callee_slot,
         argc,
     );
-}
-
-/// struct field defaults are constants evaluated once at registration, if a
-/// default is a mutable container (table) it would be shared by every
-/// constructed instance, so mutations leak across instances. clone any
-/// containers so each instance gets its own copy, immutable scalars and
-/// strings/tuples pass through unchanged
-fn cloneStructDefault(self: *VM, data: revo.Data, depth: u32) EvalError!revo.Data {
-    if (depth > 32) return data;
-    const alloc = self.runtime.alloc;
-
-    switch (data.tag()) {
-        .table => {
-            // copy the table by value: pool slots are append-only but the
-            // backing ArrayList moves on create(), so no pool pointer may be
-            // held across a nested clone. the internal array/hash buffers are
-            // stable, so a by-value copy stays valid
-            const src = (try self.tables.get(data.asTable().?)).*;
-
-            var items = std.ArrayList(revo.Data).initCapacity(alloc, src.array.items.len) catch
-                return error.OutOfMemory;
-            defer items.deinit(alloc);
-            for (src.array.items) |item|
-                items.append(alloc, try self.cloneStructDefault(item, depth + 1)) catch
-                    return error.OutOfMemory;
-
-            var keys = std.ArrayList(revo.Data).initCapacity(alloc, src.hash.count) catch
-                return error.OutOfMemory;
-            defer keys.deinit(alloc);
-            var vals = std.ArrayList(revo.Data).initCapacity(alloc, src.hash.count) catch
-                return error.OutOfMemory;
-            defer vals.deinit(alloc);
-            var hash_it = src.hash.orderedIterator();
-            while (hash_it.next()) |entry| {
-                keys.append(alloc, entry.key) catch return error.OutOfMemory;
-                vals.append(alloc, try self.cloneStructDefault(entry.val, depth + 1)) catch
-                    return error.OutOfMemory;
-            }
-
-            const new_id = try self.tables.create();
-            const new_t = try self.tables.get(new_id);
-            for (items.items) |item|
-                try new_t.push(item);
-            for (keys.items, vals.items) |k, v|
-                try new_t.putRaw(k, v, self);
-
-            return revo.Data.new.table(new_id);
-        },
-        .struct_val => {
-            const src = (try self.structGetInstance(data.asStructVal().?)).*;
-            const fields = try alloc.alloc(revo.Data, src.fields.len);
-            defer alloc.free(fields);
-            for (src.fields, 0..) |f, i|
-                fields[i] = try self.cloneStructDefault(f, depth + 1);
-
-            const new_id = try self.struct_instances.create(src.type_id, fields.len);
-            const new_inst = try self.structGetInstance(new_id);
-            @memcpy(new_inst.fields, fields);
-            return revo.Data.new.structVal(new_id);
-        },
-        else => return data,
-    }
-}
-
-pub fn structInitInstance(
-    self: *VM,
-    type_id: revo.StructTypeID,
-    init_data: Data,
-) EvalError!revo.StructInstanceID {
-    const desc = self.struct_types.getType(type_id) orelse {
-        try self.setRuntimeMessage("invalid struct type");
-        return error.Panic;
-    };
-
-    const instance_id = try self.struct_instances.create(
-        type_id,
-        desc.fields.len,
-    );
-    const instance = self.structGetInstance(instance_id) catch return error.Panic;
-
-    for (desc.fields, 0..) |f, i| {
-        if (f.default_val) |dv|
-            instance.fields[i] = try self.cloneStructDefault(dv, 0);
-    }
-
-    // undef means "no init table"
-    // anything else must be a table
-    const is_no_table = if (init_data.asAtom()) |atom|
-        atom == revo.core_atoms.undef.atomId()
-    else
-        false;
-    const init_id = init_data.asTable();
-    if (init_id == null and !is_no_table) {
-        try self.setRuntimeMessageFmt(
-            "struct `{s}` expects an init table, got {s}",
-            .{
-                desc.name,
-                revo.std_lib.typeof(init_data, self),
-            },
-        );
-        return error.TypeError;
-    }
-    if (init_id) |init_table_id| {
-        const init_table = try self.tables.get(init_table_id);
-        for (desc.fields, 0..) |f, i| {
-            if (init_table.getRaw(
-                Data.new.atom(f.name_atom),
-                self,
-            )) |val| {
-                instance.fields[i] = val;
-            }
-        }
-        var cur = init_table.hash.first;
-        while (cur != root.table.NULL_ID) {
-            const k = init_table.hash.buckets[cur].key;
-            const k_atom = k.asAtom() orelse {
-                cur = init_table.hash.buckets[cur].next;
-                continue;
-            };
-            if (desc.field_index.get(k_atom) == null) {
-                try self.setRuntimeMessageFmt(
-                    "unknown field `{s}` for struct `{s}`",
-                    .{
-                        self.stringValue(k_atom),
-                        desc.name,
-                    },
-                );
-                return error.Panic;
-            }
-            cur = init_table.hash.buckets[cur].next;
-        }
-    }
-
-    for (desc.fields, 0..) |f, i| {
-        if (instance.fields[i].rawBits() ==
-            revo.Data.new.core(.undef).rawBits() and
-            f.default_val == null)
-        {
-            try self.setRuntimeMessageFmt(
-                "missing field `{s}` for struct `{s}`",
-                .{
-                    self.stringValue(f.name_atom),
-                    desc.name,
-                },
-            );
-            return error.Panic;
-        }
-    }
-
-    return instance_id;
-}
-
-fn callStructConstructor(
-    self: *VM,
-    type_id: revo.StructTypeID,
-    instr: Instruction,
-    base: usize,
-    callee_slot: usize,
-    argc: usize,
-) EvalError!void {
-    const fiber = self.currentFiber();
-
-    if (argc > 1) {
-        const desc = self.struct_types.getType(type_id) orelse {
-            try self.setRuntimeMessage("invalid struct type");
-            return error.Panic;
-        };
-        try self.setRuntimeMessageFmt(
-            "struct `{s}` expects at most 1 init table, got {}",
-            .{ desc.name, argc },
-        );
-        return error.TypeError;
-    }
-
-    const init_data: Data = if (argc == 1)
-        fiber.registers[callee_slot + 1]
-    else
-        revo.Data.new.core(.undef);
-
-    const instance_id = try self.structInitInstance(type_id, init_data);
-
-    try self.ensureAbsoluteSlot(base + instr.c);
-    try self.writeRegisterFast(base, instr.c, Data.new.structVal(instance_id));
-}
-
-pub fn setStructField(
-    self: *VM,
-    object: Data,
-    field_atom: revo.memory.AtomID,
-    value: Data,
-) EvalError!bool {
-    const instance_id = object.asStructVal() orelse return false;
-    const instance = self.structGetInstance(instance_id) catch return error.Panic;
-    const desc = self.struct_types.getType(
-        instance.type_id,
-    ) orelse {
-        try self.setRuntimeMessage("invalid struct type");
-        return error.Panic;
-    };
-    const idx = if (self.structCacheLookup(instance.type_id, field_atom)) |cached|
-        if (cached.is_method) {
-            try self.setRuntimeMessageFmt(
-                "field `{s}` on `{s}` is a method and can't be assigned",
-                .{ self.stringValue(field_atom), desc.name },
-            );
-            return error.Panic;
-        } else cached.offset
-    else blk: {
-        const i = desc.field_index.get(field_atom) orelse {
-            try self.setRuntimeMessageFmt(
-                "unknown field `{s}` for struct `{s}`",
-                .{ self.stringValue(field_atom), desc.name },
-            );
-            return error.Panic;
-        };
-        self.structCacheInsert(instance.type_id, field_atom, false, @intCast(i), Data.new.nil());
-        break :blk i;
-    };
-    instance.fields[idx] = value;
-    return true;
-}
-
-pub fn structGetInstance(
-    self: *VM,
-    id: revo.vm.struct_mod.StructInstanceID,
-) EvalError!*revo.vm.struct_mod.StructInstance {
-    return self.struct_instances.get(id) catch |e| switch (e) {
-        error.InvalidStruct => {
-            try self.setRuntimeMessage(
-                "invalid struct instance",
-            );
-            return error.Panic;
-        },
-    };
 }
 
 pub fn returnRegister(
@@ -2166,6 +1831,5 @@ pub const setMetatable = lookup.setMetatable;
 pub const setTableMetatable = lookup.setTableMetatable;
 pub const runImportedModule = module.runImportedModule;
 const Scheduler = @import("scheduler.zig");
-const struct_mod = @import("struct.zig");
 const vm_exec = @import("exec.zig");
 const vm_gc = @import("gc.zig");

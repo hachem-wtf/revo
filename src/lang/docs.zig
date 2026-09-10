@@ -7,7 +7,6 @@ const Writer = std.Io.Writer;
 const pretty = revo.pretty;
 
 pub const FnSpec = api.FnSpec;
-pub const FieldSpec = api.FieldSpec;
 
 const bold = "\x1b[1m";
 const dim = "\x1b[2m";
@@ -410,41 +409,6 @@ fn renderTextFn(w: *Writer, spec: *const FnSpec, sig: []const u8, sig_indent: us
         try style(w, reset);
         try w.writeAll("\n");
     }
-
-    if (spec.fields.len > 0) try renderTextFields(w, spec.fields, doc_indent);
-}
-
-fn renderTextFields(w: *Writer, fields: []const FieldSpec, indent: usize) !void {
-    try w.writeAll("\n");
-    for (fields) |fl| {
-        try writeIndent(w, indent);
-        try w.writeAll("- ");
-        try style(w, bold);
-        try w.writeAll(fl.name);
-        try style(w, reset);
-        if (fl.type_text.len > 0) {
-            try w.writeAll(": ");
-            try style(w, blue);
-            try w.writeAll(fl.type_text);
-            try style(w, reset);
-        }
-        if (fl.doc.len > 0) {
-            try w.writeAll("\n");
-            var it = std.mem.splitScalar(u8, fl.doc, '\n');
-            while (it.next()) |line| {
-                const stripped = std.mem.trim(u8, line, " \t");
-                if (stripped.len == 0) {
-                    try w.writeAll("\n");
-                } else {
-                    try writeIndent(w, indent + 2);
-                    try w.writeAll(stripped);
-                    try w.writeAll("\n");
-                }
-            }
-        } else {
-            try w.writeAll("\n");
-        }
-    }
 }
 
 fn writeIndentedDoc(w: *Writer, doc: []const u8, indent: usize) !void {
@@ -674,8 +638,6 @@ fn renderHtmlFn(
         try renderHtmlDoc(w, spec.doc, indent + 2);
     }
 
-    if (spec.fields.len > 0) try renderHtmlFields(w, spec.fields, indent + 2);
-
     try renderHtmlNestedMethods(alloc, w, specs, spec.name, indent + 2, slugs, consumed);
 
     try writeIndent(w, indent);
@@ -708,26 +670,6 @@ fn renderHtmlNestedMethods(
     }
     try writeIndent(w, indent);
     try w.writeAll("</section>\n\n");
-}
-
-fn renderHtmlFields(w: *Writer, fields: []const FieldSpec, indent: usize) !void {
-    try writeIndent(w, indent);
-    try w.writeAll("<dl class=\"fields\">\n");
-    for (fields) |fl| {
-        try writeIndent(w, indent + 2);
-        try w.writeAll("<dt><code>");
-        try writeHtmlEscaped(w, fl.name);
-        if (fl.type_text.len > 0) {
-            try w.writeAll(": ");
-            try writeHtmlEscaped(w, fl.type_text);
-        }
-        try w.writeAll("</code></dt>\n");
-        if (fl.doc.len > 0) {
-            try writeHtmlTextBlock(w, indent + 2, "<dd>", "</dd>", fl.doc, 0);
-        }
-    }
-    try writeIndent(w, indent);
-    try w.writeAll("</dl>\n\n");
 }
 
 fn renderHtmlDoc(w: *Writer, doc: []const u8, indent: usize) !void {

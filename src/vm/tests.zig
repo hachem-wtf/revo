@@ -332,31 +332,6 @@ test "vm gc keeps rooted closures and captured tables alive" {
     _ = try vm.tables.get(table_id);
 }
 
-test "vm gc keeps struct methods alive" {
-    var vm = try VM.init(vt_runtime());
-    defer vm.deinit();
-
-    const proto_id = try vm.functions.createPrototype(.{
-        .addr = 0,
-        .arity = 1,
-        .total_arity = 1,
-        .name = "take",
-        .upvalue_specs = &.{},
-        .const_locals = &.{},
-        .const_local_bits = &.{},
-    });
-    const fn_id = try vm.functions.createClosure(proto_id, &.{});
-
-    var methods = std.StringHashMap(Data).init(vm.runtime.alloc);
-    errdefer methods.deinit();
-    try methods.put("take", Data.new.function(fn_id));
-    _ = try vm.struct_types.registerType("Chain", &.{}, methods);
-
-    triggerGc(&vm);
-
-    _ = try vm.functions.get(fn_id);
-}
-
 test "vm gc reuses freed tuple ids" {
     var vm = try VM.init(vt_runtime());
     defer vm.deinit();

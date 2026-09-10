@@ -31,7 +31,6 @@ pub fn maybeCollectGarbage(self: *VM) void {
     self.tables.sweep();
     self.tuples.sweep();
     self.functions.sweep();
-    self.struct_instances.sweep();
     self.strings.sweep();
 
     if (finalizer_pending) |pending| {
@@ -130,13 +129,6 @@ pub fn processMarkStack(self: *VM) void {
                 if (upvalue.open_index == null)
                     pushMark(self, upvalue.closed);
             },
-            .struct_instance => |id| {
-                if (id >= self.struct_instances.instances.items.len)
-                    continue;
-                const instance = self.struct_instances.instances.items[id] orelse continue;
-                for (instance.fields) |entry|
-                    pushMark(self, entry);
-            },
         }
     }
 }
@@ -175,15 +167,6 @@ pub inline fn markRoots(self: *VM) void {
     var cache_it = self.module_cache.iterator();
     while (cache_it.next()) |v| pushMark(self, v.value_ptr.*.result);
 
-    for (self.struct_types.types.items) |*desc| {
-        for (desc.fields) |field| {
-            if (field.default_val) |val| pushMark(self, val);
-        }
-
-        var method_it = desc.methods.iterator();
-        while (method_it.next()) |entry| pushMark(self, entry.value_ptr.*);
-    }
-
     var channel_it = self.sched.channels.iterator();
     while (channel_it.next()) |entry| {
         self.tables.mark(entry.key_ptr.*, self);
@@ -211,14 +194,11 @@ pub inline fn markRoots(self: *VM) void {
             pushMark(self, entry.value);
         }
     }
-    for (self.struct_cache) |entry| {
-        pushMark(self, entry.value);
-    }
 }
 
 pub inline fn pushMark(self: *VM, data: revo.Data) void {
     switch (data.tag()) {
-        .string, .table, .tuple, .function, .struct_val => {
+        .string, .table, .tuple, .function => {
             self.gc_mark_stack.append(self.runtime.alloc, .{ .data = data }) catch @panic("OOM in GC marking");
         },
         else => {},
@@ -241,10 +221,6 @@ pub inline fn pushMarkUpvalue(self: *VM, id: anytype) void {
     self.gc_mark_stack.append(self.runtime.alloc, .{ .upvalue = id }) catch @panic("OOM in GC marking");
 }
 
-pub inline fn pushMarkStructInstance(self: *VM, id: anytype) void {
-    self.gc_mark_stack.append(self.runtime.alloc, .{ .struct_instance = id }) catch @panic("OOM in GC marking");
-}
-
 pub fn markData(self: *VM, data: revo.Data) void {
     switch (data.tag()) {
         .string => self.strings.mark(data.asString().?),
@@ -258,10 +234,6 @@ pub fn markData(self: *VM, data: revo.Data) void {
         ),
         .function => self.functions.mark(
             data.asFunction().?,
-            self,
-        ),
-        .struct_val => self.struct_instances.mark(
-            data.asStructVal().?,
             self,
         ),
         else => {},

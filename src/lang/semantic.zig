@@ -4,7 +4,6 @@ const std = @import("std");
 const lang = @import("./root.zig");
 const ast = @import("./ast.zig");
 const diagnostic = @import("diagnostic.zig");
-const struct_layout = @import("compiler/types.zig");
 const types_mod = @import("compiler/types.zig");
 const type_serde = @import("type_serde.zig");
 const module_iface = @import("module_iface.zig");
@@ -118,8 +117,6 @@ const SemanticChecker = struct {
     type_aliases: std.StringHashMap(Entry),
     /// caller-owned out-map: declared name -> doc text, last declare wins
     docs: ?*std.StringHashMap([]const u8),
-    struct_layouts: std.StringHashMap([]const struct_layout.FieldDef),
-    struct_optional_fields: std.StringHashMap(std.StringHashMap(void)),
     /// one sig per stdlib spec, keyed by the spec's const-storage address
     sig_cache: std.AutoHashMap(*const revo.std_lib.api.FnSpec, *const FnSig),
     /// function sigs parsed from stdlib specs (globals, methods, module
@@ -168,8 +165,6 @@ const SemanticChecker = struct {
             .scopes = try .initCapacity(alloc, 4),
             .type_aliases = .init(alloc),
             .docs = docs,
-            .struct_layouts = .init(alloc),
-            .struct_optional_fields = .init(alloc),
             .sig_cache = .init(alloc),
             .stdlib_sig_ptrs = try .initCapacity(alloc, 4),
             .return_types = try .initCapacity(alloc, 4),
@@ -229,7 +224,6 @@ const SemanticChecker = struct {
             const name: ?[]const u8 = switch (inner.expr) {
                 .binding => |b| if (b.target.expr == .ident) b.target.expr.ident else null,
                 .type_alias => |t| t.name,
-                .struct_def => |d| d.name,
                 .import_stmt => |stmt| stmt.name,
                 .macro_expr => |m| m.name,
                 .proc_macro => |p| p.name,
@@ -519,12 +513,6 @@ const SemanticChecker = struct {
                 }
             }
         }
-        // struct field access
-        if (object_type.tag == .struct_type) {
-            const struct_name = object_type.tag.struct_type;
-            const layout = self.struct_layouts.get(struct_name) orelse return .{ .tag = .any };
-            for (layout) |f| if (std.mem.eql(u8, f.name, name)) return if (f.field_type.tag != .any) f.field_type else if (f.type_name) |tn| types_mod.resolveTypeName(self, tn) else types_mod.TypeInfo{ .tag = .any };
-        }
         // stdlib module function lookup: fs.exists?, file.read, time.now.
         // only globals are modules; a local binding shadows the module
         if (object.expr == .ident and
@@ -635,7 +623,6 @@ const SemanticChecker = struct {
         return switch (node.expr) {
             .binding => |b| try self.analyzeBinding(b, null, node.span),
             .decl => |d| try self.analyzeDecl(d, node.span),
-            .struct_def => |def| try self.analyzeStruct(def, node.span),
             .type_alias => |alias| try self.analyzeTypeAlias(alias, null, node.span),
             .fn_expr => |fn_expr| try self.analyzeFnExpr(fn_expr, node.span),
             .block => |exprs| blk: {
@@ -906,7 +893,6 @@ const SemanticChecker = struct {
         return switch (decl.inner.expr) {
             .binding => |b| try self.analyzeBinding(b, decl.doc, decl.inner.span),
             .type_alias => |alias| try self.analyzeTypeAlias(alias, decl.doc, decl.inner.span),
-            .struct_def => |def| try self.analyzeStruct(def, decl.inner.span),
             else => try self.analyzeNode(decl.inner),
         };
     }
@@ -939,57 +925,6 @@ const SemanticChecker = struct {
         const t = self.evalCheckedTypeExpr(alias.type_expr) catch types_mod.TypeInfo{ .tag = .any };
         try self.type_aliases.put(alias.name, .{ .info = t, .doc = doc orelse alias.doc });
         return .{ .tag = .any };
-    }
-
-    fn analyzeStruct(self: *SemanticChecker, def: anytype, span: ast.Span) !types_mod.TypeInfo {
-        _ = span;
-        var seen = std.StringHashMap(void).init(self.alloc);
-        var fields = try std.ArrayList(struct_layout.FieldDef).initCapacity(self.alloc, def.items.len);
-        var optional = std.StringHashMap(void).init(self.alloc);
-
-        // declare the struct name into scope first so method bodies can see it
-        try self.pushScope();
-        try self.declare(def.name, .{ .tag = .{ .struct_type = def.name } }, null);
-
-        for (def.items) |item| switch (item) {
-            .field => |field| {
-                if (seen.contains(field.name)) {
-                    try self.appendError(
-                        try std.fmt.allocPrint(self.alloc, "duplicate field `{s}` in struct `{s}`", .{ field.name, def.name }),
-                        field.name_span,
-                        "duplicate field",
-                    );
-                    continue;
-                }
-                try seen.put(field.name, {});
-                if (field.default_value) |_| try optional.put(field.name, {});
-                const field_type: types_mod.TypeInfo = if (field.type_name) |tn|
-                    try self.evalCheckedTypeExpr(tn)
-                else if (field.default_value) |dflt|
-                    types_mod.inferExprType(self, dflt)
-                else
-                    .{ .tag = .any };
-                try fields.append(self.alloc, .{
-                    .name = field.name,
-                    .type_name = if (field.type_name) |tn| switch (tn.kind) {
-                        .named => |n| n,
-                        else => try type_serde.formatTypeOpts(self.alloc, field_type, .{ .short = true }),
-                    } else null,
-                    .field_type = field_type,
-                });
-            },
-            .binding => |b| {
-                _ = try self.analyzeBinding(b, null, b.target.span);
-            },
-        };
-        self.popScope();
-
-        const slice = try fields.toOwnedSlice(self.alloc);
-        try self.struct_layouts.put(def.name, slice);
-        try self.struct_optional_fields.put(def.name, optional);
-        // also declare into the outer scope so the name is usable after the struct def
-        try self.declare(def.name, .{ .tag = .{ .struct_type = def.name } }, null);
-        return .{ .tag = .{ .struct_type = def.name } };
     }
 
     pub fn isTypeParam(self: *SemanticChecker, name: []const u8) bool {
@@ -1223,16 +1158,6 @@ const SemanticChecker = struct {
                     }
                     try self.markEscaped(field.object.expr.ident);
                 }
-                if (object_type.tag == .struct_type) {
-                    const layout = self.struct_layouts.get(object_type.tag.struct_type) orelse return .{ .tag = .any };
-                    for (layout) |f| {
-                        if (!std.mem.eql(u8, f.name, field.name)) continue;
-                        if (!types_mod.canCoerce(value_type, f.field_type)) {
-                            try self.appendFieldMismatch(field, f.field_type, value_type);
-                        }
-                        return .{ .tag = .any };
-                    }
-                }
             },
             .index => |idx| {
                 // static keys join the known fields so later reads see
@@ -1271,18 +1196,7 @@ const SemanticChecker = struct {
                         try self.declare(idx.object.expr.ident, generic, prev_doc);
                     }
                 }
-                if (actual_type.tag == .struct_type) {
-                    const name_str = actual_type.tag.struct_type;
-                    try self.appendError(
-                        try std.fmt.allocPrint(
-                            self.alloc,
-                            "methods can only be declared inside the definition of `{s}`",
-                            .{name_str},
-                        ),
-                        idx.object.span,
-                        "here",
-                    );
-                } else if (!types_mod.canCoerce(types_mod.TABLE_GENERIC, actual_type)) {
+                if (!types_mod.canCoerce(types_mod.TABLE_GENERIC, actual_type)) {
                     const name_str = try type_serde.formatType(self.alloc, actual_type);
 
                     try self.appendError(
@@ -1319,7 +1233,7 @@ const SemanticChecker = struct {
         return types_mod.canCoerce(actual, expected);
     }
 
-    fn analyzeCall(self: *SemanticChecker, call: anytype, span: ast.Span) !types_mod.TypeInfo {
+    fn analyzeCall(self: *SemanticChecker, call: anytype, _: ast.Span) !types_mod.TypeInfo {
         // bare ident callees get the same unknown-name check as plain idents -
         // inferExprType would silently fall back to .any
         if (call.callee.expr == .ident) {
@@ -1350,76 +1264,6 @@ const SemanticChecker = struct {
             }
         }
         const callee_type = types_mod.inferExprType(self, call.callee);
-        // struct init validation
-        if (callee_type.tag == .struct_type) {
-            const struct_name = callee_type.tag.struct_type;
-            const layout = self.struct_layouts.get(struct_name) orelse {
-                for (call.args) |arg| _ = try self.analyzeNode(arg);
-                return .{ .tag = .any };
-            };
-            const optional_fields = self.struct_optional_fields.get(struct_name);
-            var provided = std.StringHashMap(void).init(self.alloc);
-            var dynamic_entries = false;
-            if (call.args.len == 1 and call.args[0].expr == .table) {
-                const table_entries = call.args[0].expr.table;
-                for (table_entries) |entry| {
-                    const key = entry.key orelse {
-                        dynamic_entries = true;
-                        continue;
-                    };
-                    if (key.expr != .ident) {
-                        dynamic_entries = true;
-                        continue;
-                    }
-                    var found = false;
-                    for (layout) |fd| {
-                        if (!std.mem.eql(u8, fd.name, key.expr.ident)) continue;
-                        found = true;
-                        try provided.put(fd.name, {});
-                        if (fd.field_type.tag == .any) break;
-                        const actual = types_mod.inferExprType(self, entry.value);
-                        if (!numberAccepts(fd.field_type, actual)) {
-                            const actual_str = try type_serde.formatType(self.alloc, actual);
-                            const expected_str = try type_serde.formatType(self.alloc, fd.field_type);
-                            try self.appendError(
-                                try std.fmt.allocPrint(self.alloc, "field `{s}` on `{s}` wants {s}, got {s}", .{
-                                    fd.name, struct_name, expected_str, actual_str,
-                                }),
-                                entry.value.span,
-                                "wrong type",
-                            );
-                        }
-                        break;
-                    }
-                    if (!found) {
-                        try self.appendError(
-                            try std.fmt.allocPrint(self.alloc, "unknown field `{s}` for struct `{s}`", .{
-                                key.expr.ident, struct_name,
-                            }),
-                            key.span,
-                            "unknown field",
-                        );
-                    }
-                }
-            }
-            if ((call.args.len == 0 or (call.args.len == 1 and call.args[0].expr == .table)) and !dynamic_entries) {
-                for (layout) |fd| {
-                    if (optional_fields) |opts| {
-                        if (opts.contains(fd.name)) continue;
-                    }
-                    if (provided.contains(fd.name)) continue;
-                    try self.appendError(
-                        try std.fmt.allocPrint(self.alloc, "missing field `{s}` for struct `{s}`", .{
-                            fd.name, struct_name,
-                        }),
-                        span,
-                        "missing field",
-                    );
-                }
-            }
-            for (call.args) |arg| _ = try self.analyzeNode(arg);
-            return .{ .tag = .any };
-        }
         // typed function call validation
         if (callee_type.tag == .function) {
             const sig_ptr = callee_type.tag.function;
@@ -1711,24 +1555,6 @@ const SemanticChecker = struct {
             .{ expected_str, actual_str },
         );
         try self.appendError(msg, span, label);
-    }
-
-    fn appendFieldMismatch(self: *SemanticChecker, field: anytype, expected: types_mod.TypeInfo, actual: types_mod.TypeInfo) !void {
-        const expected_str = try type_serde.formatType(self.alloc, expected);
-        const actual_str = try type_serde.formatType(self.alloc, actual);
-        const obj_name = try type_serde.formatType(self.alloc, types_mod.inferExprType(self, field.object));
-        const msg = try std.fmt.allocPrint(self.alloc, "field `{s}` on `{s}` wants {s}, got {s}", .{
-            field.name,
-            obj_name,
-            expected_str,
-            actual_str,
-        });
-        try self.appendError(msg, field.object.span, try std.fmt.allocPrint(self.alloc, "field {s} on {s} is not {s} (got {s})", .{
-            field.name,
-            obj_name,
-            expected_str,
-            actual_str,
-        }));
     }
 
     fn appendReturnMismatch(self: *SemanticChecker, span: ast.Span, expected: types_mod.TypeInfo, actual: types_mod.TypeInfo) !void {

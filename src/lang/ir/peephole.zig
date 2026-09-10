@@ -68,8 +68,8 @@ pub fn peepholeIr(self: *Compiler) !void {
                 _ = try propagateMove(i, insts, live, is_target, read_buf);
             },
             .store_local, .bind_local => eliminateSelfLoad(i, insts, live, is_target),
-            .table_set_atom, .struct_set_offset => eliminateFieldRefetch(i, insts, live, is_target),
-            .table_get_atom, .struct_get_offset => reuseObjectLoad(i, insts, live, is_target),
+            .table_set_atom => eliminateFieldRefetch(i, insts, live, is_target),
+            .table_get_atom => reuseObjectLoad(i, insts, live, is_target),
             .add, .sub, .mul, .div, .mod, .int_div, .band, .bor, .bxor, .shl, .shr, .add_int, .sub_int, .mul_int, .mod_int, .div_int, .band_int, .bor_int, .bxor_int, .shl_int, .shr_int, .add_int_imm, .sub_int_imm, .mul_int_imm, .band_int_imm, .lt_int_imm => _ = try foldIdentity(self, i, insts, live),
             .jump => {
                 if (inst.op_arg == i + 1) live[i] = false;
@@ -151,10 +151,10 @@ fn propagateMove(i: usize, insts: []*ir.IrInst, live: []bool, is_target: []const
         if (!is_user and !dst_written and readsReg(insts[j], dst_reg, read_buf)) {
             is_user = true;
         }
-        // a table/struct setter reads its object through `result_reg`, not
+        // a table setter reads its object through `result_reg`, not
         // an operand, so a move feeding it would otherwise look orphaned
         if (!is_user and !dst_written) switch (insts[j].opcode) {
-            .table_set_atom, .table_set, .struct_set_offset, .struct_set_method => {
+            .table_set_atom, .table_set => {
                 if (insts[j].result_reg == dst_reg) is_user = true;
             },
             else => {},
@@ -175,8 +175,7 @@ fn propagateMove(i: usize, insts: []*ir.IrInst, live: []bool, is_target: []const
     // when the value is straight-line and never touches the object register,
     // shift the value down one register, point the setter at the object, and
     // drop the copy
-    if (user.opcode == .table_set_atom or user.opcode == .table_set or
-        user.opcode == .struct_set_offset or user.opcode == .struct_set_method)
+    if (user.opcode == .table_set_atom or user.opcode == .table_set)
     {
         return shiftSetterCopy(i, insts, live, is_target, read_buf, user_idx);
     }
@@ -307,7 +306,7 @@ fn eliminateFieldRefetch(i: usize, insts: []*ir.IrInst, live: []bool, is_target:
     live[i + 2] = false;
 }
 
-/// `load_local rX, slot; struct_get_offset rX, rX, off` reloads an object that
+/// `load_local rX, slot; table_get_atom rX, rX, off` reloads an object that
 /// an earlier live `load_local rO, slot` already fetched and that is still
 /// sitting in rO: nothing rewrites rO or the slot and no branch enters or
 /// leaves the run, so the field read can consume rO directly and the reload
@@ -361,12 +360,11 @@ fn reuseObjectLoad(i: usize, insts: []*ir.IrInst, live: []bool, is_target: []con
     if (redundant) |rd| live[rd] = false;
 }
 
-/// the `table_get_atom`/`struct_get_offset` that reads the field the setter
+/// the `table_get_atom` that reads the field the setter
 /// just wrote, from the same object, into the value register
 fn isFieldRefetchGet(inst: *const ir.IrInst, set_op: Opcode, field: Operand, reg: Register) bool {
     switch (inst.opcode) {
         .table_get_atom => if (set_op != .table_set_atom) return false,
-        .struct_get_offset => if (set_op != .struct_set_offset) return false,
         else => return false,
     }
     if (inst.result_reg != reg) return false;
@@ -454,15 +452,14 @@ fn shiftSetterCopy(i: usize, insts: []*ir.IrInst, live: []bool, is_target: []con
     return true;
 }
 
-/// a `table_get_atom`/`struct_get_offset` that immediately follows a
-/// `table_set_atom`/`struct_set_offset` of the same field and reads the same
+/// a `table_get_atom` that immediately follows a
+/// `table_set_atom` of the same field and reads the same
 /// object register: the assignment's expression result, reading the value
 /// that was just stored
 fn isFieldReadback(inst: *const ir.IrInst, user: *const ir.IrInst, dst_reg: Register) bool {
-    if (user.opcode != .table_set_atom and user.opcode != .struct_set_offset) return false;
+    if (user.opcode != .table_set_atom) return false;
     switch (inst.opcode) {
         .table_get_atom => if (user.opcode != .table_set_atom) return false,
-        .struct_get_offset => if (user.opcode != .struct_set_offset) return false,
         else => return false,
     }
     if (inst.result_reg != dst_reg) return false;

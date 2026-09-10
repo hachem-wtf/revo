@@ -109,7 +109,6 @@ pub const SymbolKind = enum {
     binding,
     function,
     param,
-    struct_type,
     type_alias,
     macro,
 };
@@ -1856,7 +1855,7 @@ fn collectDependencyClosure(
     }
 }
 
-/// walk AST and collect bindings, functions, structs, type aliases
+/// walk AST and collect bindings, functions, type aliases
 fn collectSymbolsFromParsed(self: *Workspace, root: *lang.Node, text: []const u8) ![]Symbol {
     var out = try std.ArrayList(Symbol).initCapacity(self.alloc, 8);
     errdefer out.deinit(self.alloc);
@@ -2453,7 +2452,6 @@ const SymbolVisitor = struct {
         switch (node.expr) {
             .binding => |b| self.addBinding(b),
             .fn_expr => |f| for (f.params) |p| self.addName(p.name, .param, p.name_span),
-            .struct_def => |def| self.addName(def.name, .struct_type, def.name_span),
             .type_alias => |t| self.addName(t.name, .type_alias, t.name_span),
             // proc and template macros share the kind; node span lands
             // on the decl start (neither carries a name span)
@@ -2757,7 +2755,6 @@ pub const CompletionKind = enum {
     keyword,
     function,
     module,
-    struct_type,
     variable,
     field,
     class,
@@ -2908,8 +2905,8 @@ fn nullResolve(_: *anyopaque, _: []const u8, _: std.mem.Allocator) ?[]const u8 {
     return null;
 }
 
-/// completions for fields of a table (after a dot); struct fields and
-/// nested receivers stay silent for now
+/// completions for fields of a table (after a dot); nested
+/// receivers stay silent for now
 fn addFieldCompletions(
     self: *Workspace,
     vm: *VM,
@@ -2996,8 +2993,6 @@ fn addGeneralCompletions(
                 .function
             else if (entry.value_ptr.tag() == .table)
                 .module
-            else if (entry.value_ptr.tag() == .struct_type)
-                .struct_type
             else
                 .variable;
 
@@ -3053,7 +3048,6 @@ fn addGeneralCompletions(
             if (!std.mem.startsWith(u8, sym.name, prefix)) continue;
             const kind: CompletionKind = switch (sym.kind) {
                 .function, .macro => .function,
-                .struct_type => .struct_type,
                 .type_alias => .class,
                 .binding, .param => .variable,
             };

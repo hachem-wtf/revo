@@ -38,7 +38,6 @@ pub const TokenType = enum {
     kw_test,
     kw_suite,
     kw_skip,
-    kw_struct,
     kw_type,
     kw_fn,
     kw_if,
@@ -123,7 +122,7 @@ pub const TokenType = enum {
             .number => .number,
             .string, .multiline_string, .backtick_string => .string,
             .hash => .enum_member,
-            .kw_const, .kw_let, .kw_macro, .kw_test, .kw_suite, .kw_skip, .kw_struct, .kw_type, .kw_fn, .kw_if, .kw_unless, .kw_else, .kw_match, .kw_when, .kw_do, .kw_end, .kw_loop, .kw_for, .kw_while, .kw_global, .kw_in, .kw_break, .kw_continue, .kw_return, .kw_import, .kw_spawn, .kw_join, .kw_yield, .kw_and, .kw_or, .kw_not, .kw_band, .kw_bor, .kw_bxor, .kw_shl, .kw_shr, .kw_comp, .kw_proc, .kw_orelse, .kw_pub, .kw_declare => .keyword,
+            .kw_const, .kw_let, .kw_macro, .kw_test, .kw_suite, .kw_skip, .kw_type, .kw_fn, .kw_if, .kw_unless, .kw_else, .kw_match, .kw_when, .kw_do, .kw_end, .kw_loop, .kw_for, .kw_while, .kw_global, .kw_in, .kw_break, .kw_continue, .kw_return, .kw_import, .kw_spawn, .kw_join, .kw_yield, .kw_and, .kw_or, .kw_not, .kw_band, .kw_bor, .kw_bxor, .kw_shl, .kw_shr, .kw_comp, .kw_proc, .kw_orelse, .kw_pub, .kw_declare => .keyword,
             .plus, .minus, .star, .slash, .slash_slash, .percent, .caret, .caret_assign, .eq, .neq, .lt, .gt, .lte, .gte, .assign, .plus_assign, .minus_assign, .star_assign, .slash_assign, .percent_assign, .concat, .concat_assign, .arrow, .fat_arrow, .dot, .dotdot, .colon, .comma, .semicolon, .pipe, .pipe_forward, .huh, .bang, .lparen, .rparen, .lbracket, .rbracket, .lsquiggly, .rsquiggly, .attribute => .operator,
             .comment => .comment,
             .doc_comment => .comment,
@@ -144,7 +143,6 @@ pub const TokenType = enum {
         .{ "test", .kw_test },
         .{ "suite", .kw_suite },
         .{ "skip", .kw_skip },
-        .{ "struct", .kw_struct },
         .{ "type", .kw_type },
         .{ "fn", .kw_fn },
         .{ "if", .kw_if },
@@ -1290,21 +1288,6 @@ test "lexes fiber keywords" {
         .kw_spawn,
         .kw_join,
         .kw_yield,
-        .eof,
-    });
-}
-
-test "lexes struct keyword" {
-    try t.expectTypes(
-        \\ struct User do name: string end
-    , &.{
-        .kw_struct,
-        .ident,
-        .kw_do,
-        .ident,
-        .colon,
-        .ident,
-        .kw_end,
         .eof,
     });
 }
