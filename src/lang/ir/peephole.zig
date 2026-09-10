@@ -175,8 +175,7 @@ fn propagateMove(i: usize, insts: []*ir.IrInst, live: []bool, is_target: []const
     // when the value is straight-line and never touches the object register,
     // shift the value down one register, point the setter at the object, and
     // drop the copy
-    if (user.opcode == .table_set_atom or user.opcode == .table_set)
-    {
+    if (user.opcode == .table_set_atom or user.opcode == .table_set) {
         return shiftSetterCopy(i, insts, live, is_target, read_buf, user_idx);
     }
 

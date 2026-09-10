@@ -16,7 +16,6 @@ const Table = revo.table.Table;
 const testing = revo.lang.testing;
 const table_methods = table_std.Impl;
 
-
 //
 // RunningStats
 //
@@ -216,13 +215,13 @@ test "RunningStats struct and methods" {
     try std.testing.expectApproxEqAbs(runningStats.kurtosisS(), -0.7000000000000008, tolerance);
 }
 
-
-
+// zig fmt: off
 const RunningRegress = struct { // An accumulator for regression calculations.
     n: usize = 0,               // amount of pushed data
     x_stats: RunningStats,      // stats for the first set of data
     y_stats: RunningStats,      // stats for the second set of data
     s_xy: f64 = 0.0,            // accumulated data for combined xy
+    // zig fmt: on
 
     pub fn init(allocator: std.mem.Allocator) RunningRegress {
         return .{
@@ -299,7 +298,10 @@ test "RunningRegress struct and methods" {
 
     var list_a: std.ArrayList(f64) = .empty;
     var list_b: std.ArrayList(f64) = .empty;
-    defer { list_a.deinit(a); list_b.deinit(a); }
+    defer {
+        list_a.deinit(a);
+        list_b.deinit(a);
+    }
     try list_a.appendSlice(a, &.{ 1.0, 2.0, 3.0, 4.0, 5.0 });
     try list_b.appendSlice(a, &.{ 2.0, 3.0, 5.0, 4.0, 6.0 });
 
@@ -315,7 +317,6 @@ test "RunningRegress struct and methods" {
     try std.testing.expectApproxEqAbs(runningRegress.covariance(), 1.8, tolerance);
     try std.testing.expectApproxEqAbs(runningRegress.sample_covariance(), 2.25, tolerance);
 }
-
 
 pub const Impl = struct {
     fn buildStats(vm: *VM, table_id: Ts.table) !RunningStats {
@@ -568,7 +569,8 @@ pub const Impl = struct {
 
         if (table_1.array.items.len == 0 or table_2.array.items.len == 0) {
             return error.EmptyTable;
-        } if (table_1.array.items.len != table_2.array.items.len) {
+        }
+        if (table_1.array.items.len != table_2.array.items.len) {
             return error.NonMatchingTables;
         }
 

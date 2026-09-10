@@ -6,7 +6,6 @@ const Compiler = revo.lang.compiler.Compiler;
 
 const ast = @import("../ast.zig");
 const Node = ast.Node;
-const flow = @import("flow.zig");
 const state = @import("state.zig");
 const ir = @import("../ir/root.zig");
 const toRegister = state.toRegister;

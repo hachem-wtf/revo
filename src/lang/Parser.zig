@@ -2066,12 +2066,12 @@ const call_stmt_boundary_tokens = makeTokenSet(&.{
 });
 
 const expr_start_tokens = makeTokenSet(&.{
-    .number,      .string,       .multiline_string, .hash,      .ident,
-    .kw_const,    .kw_let,       .kw_macro,         .minus,
-    .kw_not,      .pipe_forward, .lparen,           .kw_fn,     .kw_if,
-    .kw_unless,   .kw_match,     .kw_do,            .kw_loop,   .kw_break,
-    .kw_continue, .kw_return,    .kw_import,        .kw_spawn,  .kw_join,
-    .kw_yield,    .lsquiggly,    .kw_type,          .kw_pub,    .eof,
+    .number,       .string,    .multiline_string, .hash,     .ident,
+    .kw_const,     .kw_let,    .kw_macro,         .minus,    .kw_not,
+    .pipe_forward, .lparen,    .kw_fn,            .kw_if,    .kw_unless,
+    .kw_match,     .kw_do,     .kw_loop,          .kw_break, .kw_continue,
+    .kw_return,    .kw_import, .kw_spawn,         .kw_join,  .kw_yield,
+    .lsquiggly,    .kw_type,   .kw_pub,           .eof,
 });
 
 /// expr allows bare call after it (ident, field, call, fn_expr)

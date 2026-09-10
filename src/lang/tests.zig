@@ -3658,4 +3658,3 @@ test "import typed function with no type annotations falls through" {
         \\ plain.double(21)
     , 42);
 }
-
