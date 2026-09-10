@@ -37,6 +37,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       in `a.` hover and completions; prelude macros no longer leak
       into dependency members with bogus lines
 
+- just match
+    sugar for `match :true`
+    ```ruby
+    match
+    | :true => 5
+    # => 5
+    ```
+
 - std:
   - `hash(any) -> num`
   - `fs`:

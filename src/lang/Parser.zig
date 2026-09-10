@@ -753,19 +753,29 @@ fn parseUnless(self: *Parser, start: Token) anyerror!*Node {
 
 /// match expr | pat expr | pat expr
 fn parseMatch(self: *Parser, start: Token, subj: ?*Node) anyerror!*Node {
-    const subject = subj orelse try self.parseExpression(25);
+    const subject = subj orelse blk: {
+        if (self.check(.pipe)) {
+            // synthetic `:true`
+            break :blk try self.allocExpr(start.span(), .{ .hash = "true" });
+        }
+        break :blk try self.parseExpression(25);
+    };
+
     var arms = try std.ArrayList(ast.MatchArm).initCapacity(self.alloc, 2);
     errdefer {
         for (arms.items) |arm| self.alloc.free(arm.matchers);
         arms.deinit(self.alloc);
     }
+
     var end_span = subject.span;
     while (self.match(.pipe)) {
         const arm = try self.parseMatchArm();
         end_span = arm.then.span;
         try arms.append(self.alloc, arm);
     }
+
     if (arms.items.len == 0) return error.ExpectedMatchArm;
+
     return self.allocExpr(Span.merge(start.span(), end_span), .{ .match_expr = .{
         .subject = subject,
         .arms = try arms.toOwnedSlice(self.alloc),
