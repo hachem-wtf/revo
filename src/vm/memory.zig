@@ -195,6 +195,7 @@ pub const Data = extern struct {
         return print_mod.writeData(self, writer, v, mode);
     }
 
+    // -- [misc] --------------------------------------------------------------
     pub fn print(self: Data, vm: *VM) void {
         var buf: [16]u8 = undefined;
         var stdout = vm.runtime.stdout.writer(vm.runtime.io, &buf);
@@ -202,6 +203,43 @@ pub const Data = extern struct {
             std.debug.print("<print-error>", .{});
             return;
         };
+    }
+
+    ///
+    /// hash by value semantics, matching Table.keyEq
+    ///
+    /// ~ numbers/atoms by bits
+    /// ~ strings and tuples by content
+    /// ~ strings with the same content but different interner ids
+    ///   (e.g. a concatenated key vs a literal) must hash alike
+    ///   , otherwise equal keys land in different probe chains and lookup
+    ///   misses even though keyEq would match
+    ///
+    pub fn hash(self: Data, vm: *VM) u64 {
+        switch (self.tag()) {
+            .number, .atom => return self.bits,
+            .string => {
+                var h = std.hash.Wyhash.init(0);
+                h.update(&[_]u8{@intCast(@intFromEnum(self.tag()))});
+                h.update(vm.stringValue(self.asString().?));
+                return h.final();
+            },
+            .tuple => {
+                const tuple = vm.tuples.get(self.asTuple().?) catch return self.bits;
+                var h = std.hash.Wyhash.init(0);
+                h.update(&[_]u8{@intCast(@intFromEnum(self.tag()))});
+                for (tuple.items) |item| {
+                    const item_hash = hash(item, vm);
+                    h.update(std.mem.asBytes(&item_hash));
+                }
+                return h.final();
+            },
+            else => {},
+        }
+        var h = std.hash.Wyhash.init(0);
+        h.update(&[_]u8{@intCast(@intFromEnum(self.tag()))});
+        h.update(std.mem.asBytes(&self.unboxed()));
+        return h.final();
     }
 };
 

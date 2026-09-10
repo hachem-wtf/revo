@@ -577,6 +577,7 @@ inline fn execFiberDispatch(
         .table_get => {
             const object = regRead(regs, base, instr.b);
             const key = regRead(regs, base, instr.c);
+
             if (object.asTable()) |t_id| {
                 const t = try self.tableFast(t_id);
                 if (t.getRaw(key, self)) |value| {
@@ -586,6 +587,7 @@ inline fn execFiberDispatch(
                     continue :dispatch instr.op;
                 }
             }
+
             if (try self.resolveField(object, key, instr.a)) |resolved| {
                 regWrite(regs, base, instr.a, resolved.value);
             } else regWrite(regs, base, instr.a, revo.Data.new.core(.undef));

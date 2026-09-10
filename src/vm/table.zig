@@ -24,6 +24,7 @@ const memory = revo.memory;
 const Data = memory.Data;
 const testing = revo.lang.testing;
 const compare = @import("compare.zig").compare;
+const fastEq = @import("compare.zig").fastEq;
 const pool = @import("pool.zig");
 
 pub const NULL_ID = std.math.maxInt(u32);
@@ -176,38 +177,6 @@ fn freeTable(t: *Table, alloc: std.mem.Allocator) void {
 }
 
 pub const Table = struct {
-    /// keys hash by their value semantics, matching keyEq: numbers/atoms by
-    /// bits, strings and tuples by content. strings with the same content but
-    /// different interner ids (e.g. a concatenated key vs a literal) must hash
-    /// alike, otherwise equal keys land in different probe chains and lookup
-    /// misses even though keyEq would match
-    fn hashKey(key: Data, vm: *revo.VM) u64 {
-        switch (key.tag()) {
-            .number, .atom => return key.bits,
-            .string => {
-                var h = std.hash.Wyhash.init(0);
-                h.update(&[_]u8{@intCast(@intFromEnum(key.tag()))});
-                h.update(vm.stringValue(key.asString().?));
-                return h.final();
-            },
-            .tuple => {
-                const tuple = vm.tuples.get(key.asTuple().?) catch return key.bits;
-                var h = std.hash.Wyhash.init(0);
-                h.update(&[_]u8{@intCast(@intFromEnum(key.tag()))});
-                for (tuple.items) |item| {
-                    const item_hash = hashKey(item, vm);
-                    h.update(std.mem.asBytes(&item_hash));
-                }
-                return h.final();
-            },
-            else => {},
-        }
-        var h = std.hash.Wyhash.init(0);
-        h.update(&[_]u8{@intCast(@intFromEnum(key.tag()))});
-        h.update(std.mem.asBytes(&key.unboxed()));
-        return h.final();
-    }
-
     /// open-addressing hash table with linear probing, power-of-2 sizing,
     /// and an embedded doubly-linked list for insertion order iteration
     ///
@@ -233,7 +202,7 @@ pub const Table = struct {
             status: enum(u8) { empty, occupied } = .empty,
             key: Data = Data.new.nil(),
             val: Data = Data.new.nil(),
-            // cached hashKey(key)
+            // cached key hash
             // ~ computed once at insertion
             // ~ grow() and remove()'s backward-shift repair both
             //   need each stored key's hash again later
@@ -252,11 +221,12 @@ pub const Table = struct {
         fn lookup(self: *const HashPart, key: Data, vm: *revo.VM) ?u32 {
             if (self.buckets.len == 0) return null;
             const mask: u32 = @intCast(self.buckets.len - 1);
-            var idx = @as(u32, @truncate(hashKey(key, vm))) & mask;
+            var idx = @as(u32, @truncate(key.hash(vm))) & mask;
             const limit: u32 = self.count;
             var probes: u32 = 0;
+
             while (self.buckets[idx].status == .occupied) {
-                if (keyEq(self.buckets[idx].key, key, vm)) return idx;
+                if (fastEq(vm, self.buckets[idx].key, key)) return idx;
                 idx = (idx + 1) & mask;
                 probes += 1;
                 if (probes >= limit) return null;
@@ -279,11 +249,11 @@ pub const Table = struct {
                 try self.grow(alloc, vm);
 
             const mask: u32 = @intCast(self.buckets.len - 1);
-            const kh = hashKey(key, vm);
+            const kh = key.hash(vm);
             var idx = @as(u32, @truncate(kh)) & mask;
 
             while (self.buckets[idx].status == .occupied) {
-                if (keyEq(self.buckets[idx].key, key, vm))
+                if (fastEq(vm, self.buckets[idx].key, key))
                     return &self.buckets[idx].val;
                 idx = (idx + 1) & mask;
             }
@@ -432,19 +402,6 @@ pub const Table = struct {
     pub fn deinit(self: *Table) void {
         self.array.deinit(self.alloc);
         self.hash.deinit(self.alloc);
-    }
-
-    fn keyEq(a: Data, b: Data, vm: *revo.VM) bool {
-        if (a.tag() != b.tag()) return false;
-        return switch (a.tag()) {
-            .number => a.rawBits() == b.rawBits(),
-            .string => compare(vm, a, b) == .eq,
-            .atom => a.asAtom().? == b.asAtom().?,
-            .function => a.asFunction().? == b.asFunction().?,
-            .table => a.asTable().? == b.asTable().?,
-            .tuple => compare(vm, a, b) == .eq,
-            .foreign => a.asForeign().? == b.asForeign().?,
-        };
     }
 
     fn integerArrayIndex(key: Data) ?usize {

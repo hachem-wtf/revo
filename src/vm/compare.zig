@@ -231,3 +231,9 @@ pub inline fn evalCachedFast(
 
     VM.regWrite(slots, base, instr.a, Data.new.boolean(result));
 }
+
+pub fn fastEq(vm: *VM, a: Data, b: Data) bool {
+    if (a.bits == b.bits) return true;
+    if (a.tag() != b.tag()) return false;
+    return (compare(vm, a, b) == .eq);
+}
