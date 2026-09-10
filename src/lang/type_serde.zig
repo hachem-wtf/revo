@@ -255,6 +255,8 @@ const Parser = struct {
         var params = try std.ArrayList(ast.FnParam).initCapacity(self.alloc, 4);
         errdefer params.deinit(self.alloc);
         while (!self.check(.rparen) and !self.check(.eof)) {
+            // `?` prefix marks optional params, same as value-level fn syntax
+            const optional = self.match(.huh);
             // param names may be contextual keywords (`fn`, `end`)
             const name = self.peek();
             if (name.type != .ident and !std.mem.startsWith(u8, @tagName(name.type), "kw_"))
@@ -264,7 +266,7 @@ const Parser = struct {
             // `...` lexes as `..` + `.`; claimed only here in type position
             const variadic = self.match(.dotdot) and self.match(.dot);
             // synthesized from a type string, no source span to attach
-            try params.append(self.alloc, .{ .name = name.text, .name_span = .{ .start = 0, .end = 0, .line = 0, .column = 0 }, .type_name = type_name, .variadic = variadic });
+            try params.append(self.alloc, .{ .name = name.text, .name_span = .{ .start = 0, .end = 0, .line = 0, .column = 0 }, .type_name = type_name, .variadic = variadic, .optional = optional });
             if (!self.match(.comma)) break;
         }
         return try params.toOwnedSlice(self.alloc);
@@ -332,11 +334,16 @@ pub fn evalTypeExpr(ctx: anytype, te: *const ast.TypeExpr) !TypeInfo {
             for (f.params) |p| try param_names.append(ctx.alloc, p.name);
             const return_type = if (f.return_type) |rt| try evalTypeExpr(ctx, rt) else TypeInfo{ .tag = .any };
 
+            var required: usize = 0;
+            for (f.params) |p| {
+                if (!p.optional) required += 1;
+            }
+
             const sig = try types.newSignature(ctx.alloc, .{
                 .param_names = try param_names.toOwnedSlice(ctx.alloc),
                 .params = try param_types.toOwnedSlice(ctx.alloc),
                 .return_type = return_type,
-                .required_count = f.params.len,
+                .required_count = required,
             });
 
             return .{ .tag = .{ .function = sig } };
@@ -390,79 +397,147 @@ pub fn evalTypeExpr(ctx: anytype, te: *const ast.TypeExpr) !TypeInfo {
     }
 }
 
-const empty_span: ast.Span = .{ .start = 0, .end = 0, .line = 0, .column = 0 };
-
-fn namedExpr(alloc: std.mem.Allocator, name: []const u8) !*ast.TypeExpr {
-    return try ast.allocTypeExpr(alloc, empty_span, .{ .named = name });
-}
-
-/// semantic TypeInfo back into syntax form for printing; mirrors
-/// evalTypeExpr above, names borrow self
-fn toTypeExpr(alloc: std.mem.Allocator, ti: TypeInfo) std.mem.Allocator.Error!*ast.TypeExpr {
-    return switch (ti.tag) {
-        .bool => try namedExpr(alloc, "bool"),
-        .number => try namedExpr(alloc, "number"),
-        .string => try namedExpr(alloc, "string"),
-        .any => try namedExpr(alloc, "any"),
-        .never => try namedExpr(alloc, "never"),
-        .type_var => |n| try namedExpr(alloc, n),
-        .struct_type => |n| try namedExpr(alloc, n),
+/// render a TypeInfo straight to the writer
+/// trailing params past required_count print `?` (for optional)
+pub fn printType(ti: TypeInfo, writer: *std.Io.Writer, opts: PrintOptions) !void {
+    if (opts.short) {
+        switch (ti.tag) {
+            .atom => |s| if (s.len == 0)
+                try writer.writeAll("atom")
+            else if (s[0] == ':')
+                try writer.writeAll(s)
+            else
+                try writer.print(":{s}", .{s}),
+            .struct_type, .type_var => |s| try writer.writeAll(s),
+            .table => try writer.writeAll("table"),
+            .function => try writer.writeAll("function"),
+            // all these are spelled out so a future payload-carrying tag breaks
+            // compilation here instead of just printing its tag name
+            .bool, .number, .string, .any, .never, .tuple, .@"union" => try writer.writeAll(@tagName(ti.tag)),
+        }
+        return;
+    }
+    switch (ti.tag) {
+        .type_var => |n| try writer.writeAll(n),
+        .struct_type => |n| try writer.writeAll(n),
         // empty atom payload is the "any atom" sentinel
-        .atom => |s| if (s.len == 0) try namedExpr(alloc, "atom") else try ast.allocTypeExpr(alloc, empty_span, .{ .atom = ast.atomName(s) }),
+        .atom => |s| if (s.len == 0) try writer.writeAll("atom") else try writer.print(":{s}", .{ast.atomName(s)}),
         // empty tuple is the "any tuple" sentinel
-        .tuple => |items| if (items.len == 0) try namedExpr(alloc, "tuple") else blk: {
-            const owned = try alloc.alloc(*ast.TypeExpr, items.len);
-            for (items, owned) |item, *dst| dst.* = try toTypeExpr(alloc, item);
-            break :blk try ast.allocTypeExpr(alloc, empty_span, .{ .tuple = owned });
-        },
-        .@"union" => |variants| blk: {
-            const owned = try alloc.alloc(*ast.TypeExpr, variants.len);
-            for (variants, owned) |v, *dst| {
-                const inner = if (v.types.len == 1) try toTypeExpr(alloc, v.types[0]) else blk2: {
-                    const items = try alloc.alloc(*ast.TypeExpr, v.types.len);
-                    for (v.types, items) |vt, *d| d.* = try toTypeExpr(alloc, vt);
-                    break :blk2 try ast.allocTypeExpr(alloc, empty_span, .{ .tuple = items });
-                };
-                dst.* = inner;
+        .tuple => |items| if (items.len == 0) try writer.writeAll("tuple") else {
+            try writer.writeByte('(');
+            for (items, 0..) |item, i| {
+                if (i > 0) try writer.writeAll(", ");
+                try printType(item, writer, opts);
             }
-            break :blk try ast.allocTypeExpr(alloc, empty_span, .{ .union_of = owned });
+            try writer.writeByte(')');
         },
-        .table => |tbl| blk: {
-            // known fields render as records, same precedence as before
+        .@"union" => |variants| {
+            // `T?`, for a 2-union ending in `:nil`
+            if (variants.len == 2 and variants[1].types.len == 1 and variants[1].types[0].tag == .atom and
+                std.mem.eql(u8, ast.atomName(variants[1].types[0].tag.atom), "nil"))
+            {
+                const first = variants[0].types;
+                if (first.len == 1) {
+                    try printType(first[0], writer, opts);
+                } else {
+                    try writer.writeByte('(');
+                    for (first, 0..) |item, i| {
+                        if (i > 0) try writer.writeAll(", ");
+                        try printType(item, writer, opts);
+                    }
+                    try writer.writeByte(')');
+                }
+
+                try writer.writeByte('?');
+            } else for (variants, 0..) |v, i| {
+                if (i > 0) try writer.writeAll(" | ");
+                if (v.types.len == 1) {
+                    try printType(v.types[0], writer, opts);
+                } else {
+                    try writer.writeByte('(');
+                    for (v.types, 0..) |item, j| {
+                        if (j > 0) try writer.writeAll(", ");
+                        try printType(item, writer, opts);
+                    }
+                    try writer.writeByte(')');
+                }
+            }
+        },
+        .table => |tbl| {
             if (tbl.fields) |fields| {
-                const owned = try alloc.alloc(ast.RecordField, fields.len);
-                for (fields, owned) |f, *dst| dst.* = .{
-                    .name = f.name,
-                    .type_expr = try toTypeExpr(alloc, f.field_type),
-                };
-                break :blk try ast.allocTypeExpr(alloc, empty_span, .{ .record = owned });
+                try writer.writeByte('{');
+                for (fields, 0..) |f, i| {
+                    if (i > 0) try writer.writeAll(", ");
+                    // numeric names are positional array entries
+                    const positional = f.name.len > 0 and blk: {
+                        for (f.name) |c| if (!std.ascii.isDigit(c)) break :blk false;
+                        break :blk true;
+                    };
+                    if (!positional) {
+                        try writer.writeAll(f.name);
+                        try writer.writeAll(": ");
+                    }
+
+                    try printType(f.field_type, writer, opts);
+                    for (opts.values) |p| if (std.mem.eql(u8, p.name, f.name)) {
+                        try writer.writeAll(" = ");
+                        try writer.writeAll(p.preview);
+                        break;
+                    };
+                }
+                try writer.writeByte('}');
+            } else if (tbl.key == null and tbl.value.tag == .any) {
+                // bare `table` still bare
+                // TODO: remove in favour of `{}`
+                try writer.writeAll("table");
+            } else {
+                try writer.writeAll("table<");
+                if (tbl.key) |k| {
+                    try printType(k.*, writer, opts);
+                    try writer.writeAll(", ");
+                }
+
+                try printType(tbl.value.*, writer, opts);
+                try writer.writeByte('>');
             }
-            // bare `table` stays bare
-            if (tbl.key == null and tbl.value.tag == .any) break :blk try namedExpr(alloc, "table");
-            var params = try std.ArrayList(*ast.TypeExpr).initCapacity(alloc, 2);
-            if (tbl.key) |k| try params.append(alloc, try toTypeExpr(alloc, k.*));
-            try params.append(alloc, try toTypeExpr(alloc, tbl.value.*));
-            break :blk try ast.allocTypeExpr(alloc, empty_span, .{
-                .parameterized = .{ .name = "table", .params = try params.toOwnedSlice(alloc) },
-            });
         },
-        .function => |sig| blk: {
-            const params = try alloc.alloc(ast.FnParam, sig.params.len);
+        .function => |sig| {
+            try writer.writeAll("fn(");
             for (sig.params, 0..) |p, i| {
+                if (i > 0) try writer.writeAll(", ");
+                // required params come first, so everything past
+                // required_count is `?`
+                if (i >= sig.required_count) try writer.writeByte('?');
                 const name = if (i < sig.param_names.len) sig.param_names[i] else "";
-                params[i] = .{
-                    .name = name,
-                    .name_span = empty_span,
-                    .type_name = try toTypeExpr(alloc, p),
-                };
+                if (name.len > 0) {
+                    try writer.writeAll(name);
+                    try writer.writeAll(": ");
+                }
+                try printType(p, writer, opts);
             }
-            const ret = try toTypeExpr(alloc, sig.return_type);
-            break :blk try ast.allocTypeExpr(alloc, empty_span, .{
-                .function = .{ .params = params, .return_type = ret },
-            });
+            try writer.writeByte(')');
+            try writer.writeAll(" -> ");
+            try printType(sig.return_type, writer, opts);
         },
-    };
+        .bool => try writer.writeAll("bool"),
+        .number => try writer.writeAll("number"),
+        .string => try writer.writeAll("string"),
+        .any => try writer.writeAll("any"),
+        .never => try writer.writeAll("never"),
+    }
 }
+
+/// short gives single-word tag names
+/// values appends ` = <preview>` per record field (hover)
+pub const PrintOptions = struct {
+    short: bool = false,
+    values: []const FieldPreview = &.{},
+};
+
+pub const FieldPreview = struct {
+    name: []const u8,
+    preview: []const u8,
+};
 
 /// render a TypeExpr via printTypeExpr; mirrors parse above
 pub fn printTypeExpr(te: *const ast.TypeExpr, writer: *std.Io.Writer) !void {
@@ -487,7 +562,7 @@ pub fn printTypeExpr(te: *const ast.TypeExpr, writer: *std.Io.Writer) !void {
                 try printTypeExpr(variants[0], writer);
                 try writer.writeByte('?');
             } else for (variants, 0..) |v, i| {
-                if (i > 0) try writer.writeByte('|');
+                if (i > 0) try writer.writeAll(" | ");
                 try printTypeExpr(v, writer);
             }
         },
@@ -517,9 +592,10 @@ pub fn printTypeExpr(te: *const ast.TypeExpr, writer: *std.Io.Writer) !void {
             try writer.writeAll("fn(");
             for (f.params, 0..) |p, i| {
                 if (i > 0) try writer.writeAll(", ");
+                if (p.optional) try writer.writeByte('?');
                 if (p.name.len > 0) {
                     try writer.writeAll(p.name);
-                    if (p.type_name != null) try writer.writeByte(':');
+                    if (p.type_name != null) try writer.writeAll(": ");
                 }
 
                 if (p.type_name) |t| try printTypeExpr(t, writer);
@@ -547,15 +623,19 @@ pub fn printTypeExpr(te: *const ast.TypeExpr, writer: *std.Io.Writer) !void {
     }
 }
 
-/// render a TypeInfo via printTypeExpr: build syntax form,
-/// print it, drop transient tree (names borrow self, like eval)
+// TODO: remove
 pub fn formatType(alloc: std.mem.Allocator, ti: TypeInfo) std.mem.Allocator.Error![]const u8 {
+    return formatTypeOpts(alloc, ti, .{});
+}
+
+/// formatType with display options (`.short` for tag words, `.values` for hover)
+pub fn formatTypeOpts(alloc: std.mem.Allocator, ti: TypeInfo, opts: PrintOptions) std.mem.Allocator.Error![]const u8 {
     var buf = std.Io.Writer.Allocating.init(alloc);
     errdefer buf.deinit();
-    const te = try toTypeExpr(alloc, ti);
-    // the allocating writer only fails on oom; printTypeExpr is generic
-    // over writers so its error set is wider than what happens here
-    printTypeExpr(te, &buf.writer) catch |err| {
+
+    // allocating writer only fails on oom
+    // printType is generic over writers so its error set is wider than what happens here
+    printType(ti, &buf.writer, opts) catch |err| {
         if (err != error.OutOfMemory) unreachable;
         return error.OutOfMemory;
     };
@@ -572,7 +652,9 @@ test "type serde roundtrips" {
         "(:ok, table) | (:err, any)",
         "fn() -> string",
         "fn(a: number) -> string",
-        "fn(?a: number) -> string", // optional param a; must match the one in non-type revo code
+        // optional param a; must match the one in non-type revo code
+        // TODO: make it universal with all-all serde
+        "fn(?a: number) -> string",
         "table<string, number>",
         "(:ok, any) | (:err, any)",
         "{user: {name: string}}",

@@ -122,12 +122,7 @@ pub const Symbol = struct {
     /// condensed literal values per field (`name` -> `"me"`)
     /// for value-showing hover
     /// no default so every constructor decides
-    field_values: ?[]FieldPreview,
-};
-
-pub const FieldPreview = struct {
-    name: []const u8,
-    preview: []const u8,
+    field_values: ?[]type_serde.FieldPreview,
 };
 
 pub const Hover = struct {
@@ -795,47 +790,6 @@ fn stripPub(line: []const u8) []const u8 {
     return line;
 }
 
-/// `{name: string = "me", age: num}`
-///
-/// record fields with known literal values appended
-/// fields without previews render bare
-fn renderRecordWithValues(
-    alloc: std.mem.Allocator,
-    fields: []const types.RecordField,
-    previews: []const FieldPreview,
-) ![]const u8 {
-    var buf = std.Io.Writer.Allocating.init(alloc);
-    errdefer buf.deinit();
-    try buf.writer.writeByte('{');
-
-    for (fields, 0..) |f, i| {
-        if (i > 0) try buf.writer.writeAll(", ");
-        // implicit entries (all-digit names) render as `type = value`
-        const is_implicit = f.name.len > 0 and blk: {
-            for (f.name) |c| if (!std.ascii.isDigit(c)) break :blk false;
-            break :blk true;
-        };
-        if (!is_implicit) {
-            try buf.writer.writeAll(f.name);
-            try buf.writer.writeAll(": ");
-        }
-        const ft = try type_serde.formatType(alloc, f.field_type);
-        defer alloc.free(ft);
-        try buf.writer.writeAll(ft);
-
-        for (previews) |p| {
-            if (std.mem.eql(u8, p.name, f.name)) {
-                try buf.writer.writeAll(" = ");
-                try buf.writer.writeAll(p.preview);
-                break;
-            }
-        }
-    }
-
-    try buf.writer.writeByte('}');
-    return buf.toOwnedSlice();
-}
-
 /// `t: {name: string = "me"}`
 ///
 /// for record-typed bindings with known literal values
@@ -843,11 +797,14 @@ fn renderRecordWithValues(
 fn renderRecordDisplay(alloc: std.mem.Allocator, sym: Symbol) ![]const u8 {
     const ti = sym.type_name orelse return "";
     if (ti.tag != .table) return "";
-
-    const fields = ti.tag.table.fields orelse return "";
+    if (ti.tag.table.fields == null) return "";
     const previews = sym.field_values orelse return "";
     if (previews.len == 0) return "";
-    const record = try renderRecordWithValues(alloc, fields, previews);
+
+    var buf = std.Io.Writer.Allocating.init(alloc);
+    errdefer buf.deinit();
+    try type_serde.printType(ti, &buf.writer, .{ .values = previews });
+    const record = try buf.toOwnedSlice();
     defer alloc.free(record);
 
     return try std.fmt.allocPrint(alloc, "{s}: {s}", .{ sym.name, record });
@@ -2277,8 +2234,8 @@ fn copySymbols(alloc: std.mem.Allocator, symbols: []const Symbol) ![]Symbol {
     return dupes;
 }
 
-fn cloneFieldPreviews(alloc: std.mem.Allocator, fvs: []const FieldPreview) ![]FieldPreview {
-    const owned = try alloc.alloc(FieldPreview, fvs.len);
+fn cloneFieldPreviews(alloc: std.mem.Allocator, fvs: []const type_serde.FieldPreview) ![]type_serde.FieldPreview {
+    const owned = try alloc.alloc(type_serde.FieldPreview, fvs.len);
     for (fvs, owned) |fv, *dst| dst.* = .{
         .name = try alloc.dupe(u8, fv.name),
         .preview = try alloc.dupe(u8, fv.preview),
@@ -2541,8 +2498,8 @@ const SymbolVisitor = struct {
 
     /// condensed `{k = v}` source slices for single-line literal fields;
     /// null when nothing previewable
-    fn tableFieldPreviews(self: *@This(), entries: []const lang.ast.TableEntry) ?[]FieldPreview {
-        var out = std.ArrayList(FieldPreview).initCapacity(self.alloc, entries.len) catch return null;
+    fn tableFieldPreviews(self: *@This(), entries: []const lang.ast.TableEntry) ?[]type_serde.FieldPreview {
+        var out = std.ArrayList(type_serde.FieldPreview).initCapacity(self.alloc, entries.len) catch return null;
         var implicit_idx: u32 = 0;
         for (entries) |entry| {
             if (entry.key == null and entry.value.expr == .decl and

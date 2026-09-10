@@ -172,27 +172,6 @@ const ANY_TI: TypeInfo = .{ .tag = .any };
 /// sentinel for a generic table (no key/value constraints)
 pub const TABLE_GENERIC: TypeInfo = makeTable(null, &ANY_TI, null);
 
-pub fn typeName(T: TypeInfo, alloc: std.mem.Allocator) ![]const u8 {
-    return switch (T.tag) {
-        .atom => |s| if (s.len == 0)
-            try alloc.dupe(u8, "atom")
-        else if (s[0] == ':')
-            try alloc.dupe(u8, s)
-        else blk: {
-            var buf = try alloc.alloc(u8, s.len + 1);
-            buf[0] = ':';
-            @memcpy(buf[1..], s);
-            break :blk buf;
-        },
-        .struct_type, .type_var => |s| try alloc.dupe(u8, s),
-        .table => try alloc.dupe(u8, "table"),
-        // leaves spelled out so a future payload-carrying tag breaks
-        // compilation here instead of silently printing its tag name
-        .function => try alloc.dupe(u8, "function"),
-        .bool, .number, .string, .any, .never, .tuple, .@"union" => try alloc.dupe(u8, @tagName(T.tag)),
-    };
-}
-
 /// deep-clone a TypeInfo into a new allocator
 pub fn clone(ti: TypeInfo, alloc: std.mem.Allocator) !TypeInfo {
     return switch (ti.tag) {
