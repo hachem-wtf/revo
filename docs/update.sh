@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
-DOCS_PATH=./_ign-web/
+DOCS_PATH=docs/_ign-web/
 HASH=$(git rev-parse --short HEAD)
 STDOCPATH=$DOCS_PATH/content/std.html
+cd $(git rev-parse --show-toplevel)
 
-cp ./*.md ./_ign-web/content/
-cp ./*.html ./_ign-web/content/
-rm ./_ign-web/content/README.md
+cp docs/*.md	 docs/_ign-web/content/
+cp docs/*.html docs/_ign-web/content/
+rm docs/_ign-web/content/README.md
 
-"$(git rev-parse --show-toplevel)/zig-out/bin/revo" doc --html --splice ../src/std/iface/ < "$STDOCPATH" > ./std-output.html
+zig-out/bin/revo doc --html --splice ./src/std/iface/ < "$STDOCPATH" > ./std-output.html
 mv ./std-output.html $STDOCPATH
 
 cd $DOCS_PATH

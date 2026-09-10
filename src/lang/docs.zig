@@ -145,8 +145,6 @@ const SlugSet = struct {
         try self.map.put(alloc, base, n + 1);
         if (n == 0) return base;
 
-        std.debug.print("docgen warning: duplicate slug \"{s}\", becomes \"{s}-{d}\"\n", .{ base, base, n });
-
         return std.fmt.allocPrint(alloc, "{s}-{d}", .{ base, n });
     }
 };
