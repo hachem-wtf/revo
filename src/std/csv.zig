@@ -4,6 +4,7 @@ const root = @import("root.zig");
 const api = @import("api.zig");
 
 const Data = revo.Data;
+const testing = revo.lang.testing;
 const VM = revo.VM;
 const HostResult = root.HostResult;
 
@@ -130,10 +131,8 @@ fn writeNum(data: Data, vm: *VM, writer: *Writer) anyerror!void {
 }
 
 test "csv encode" {
-    const testing = revo.lang.testing;
-
     try testing.topString(
-        \\ csv.encode(({"a", :b, 3}, {1.2, 0.3, "1.2"}, (1,2,3))):unwrap()
+        \\ csv.encode(({"a", :b, 3}, {1.2, 0.3, "1.2"}, {1,2,3}), {}):unwrap()
     , "a,b,3\r\n1.2,0.3,1.2\r\n1,2,3\r\n");
 }
 

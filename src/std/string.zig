@@ -247,10 +247,10 @@ test "string metatable" {
 test "string methods" {
     try testing.topTrue("\"hello\":contains?(\"ell\")");
     try testing.topFalse("\"hello\":contains?(\"xyz\")");
-    try testing.topTrue("\"HELLO\":is_upper?");
-    try testing.topFalse("\"Hello\":is_upper?");
-    try testing.topTrue("\"hello\":is_lower?");
-    try testing.topFalse("\"Hello\":is_lower?");
+    try testing.topTrue("\"HELLO\":is_upper?()");
+    try testing.topFalse("\"Hello\":is_upper?()");
+    try testing.topTrue("\"hello\":is_lower?()");
+    try testing.topFalse("\"Hello\":is_lower?()");
     try testing.topFalse("\"hello\":contains?(\"xyz\")");
     try testing.topNumber("\"hello\":index_of(\"ll\")", 2);
     try testing.topString("string.of_ascii(97)", "a");
