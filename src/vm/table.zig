@@ -68,8 +68,6 @@ pub const TablePool = struct {
     pub fn create(self: *TablePool) !memory.TableID {
         if (self.dead.pop()) |id| {
             const t = self.tables.items[id].?;
-            t.array.clearRetainingCapacity();
-            t.hash.deinit(self.alloc);
             t.metatable = null;
             t.ic_version = 0;
             t.gen +%= 1;
@@ -82,11 +80,14 @@ pub const TablePool = struct {
         if (id >= self.marks.capacity()) {
             try self.marks.resize(id + 1, false);
         }
+
         const box = try self.box_pool.create(self.alloc);
         errdefer self.box_pool.destroy(box);
         box.* = Table.init(self.alloc);
+
         try self.tables.append(self.alloc, box);
         errdefer _ = self.tables.pop();
+
         try pool.link(&self.first, &self.last, &self.next, self.alloc, id);
         return id;
     }
