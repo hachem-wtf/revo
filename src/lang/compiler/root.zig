@@ -25,6 +25,7 @@ const state_mod = @import("state.zig");
 
 pub const types = @import("types.zig");
 pub const type_check = @import("type_check.zig");
+const type_serde = @import("../type_serde.zig");
 const values = @import("values.zig");
 const diagnostic = @import("../diagnostic.zig");
 
@@ -929,7 +930,7 @@ pub const Compiler = struct {
                 try self.pushNil();
             },
             .type_alias => |t| {
-                const type_info = type_check.evalTypeExpr(self, t.type_expr) catch |err| switch (err) {
+                const type_info = type_serde.evalTypeExpr(self, t.type_expr) catch |err| switch (err) {
                     error.OutOfMemory => return error.OutOfMemory,
                 };
                 try self.type_aliases.put(t.name, type_info);
@@ -1308,8 +1309,8 @@ pub const Compiler = struct {
                 actual_type,
             ) catch |err| switch (err) {
                 error.TypeError => {
-                    const expected_str = try expected_type.formatType(self.alloc);
-                    const actual_str = try actual_type.formatType(self.alloc);
+                    const expected_str = try type_serde.formatType(self.alloc, expected_type);
+                    const actual_str = try type_serde.formatType(self.alloc, actual_type);
                     const label = if (sig.param_names[i].len == 0)
                         try std.fmt.allocPrint(
                             self.alloc,
@@ -1371,8 +1372,8 @@ pub const Compiler = struct {
                 const actual_type = type_check.inferExprType(self, full_args[idx]);
                 type_check.checkType(expected_type, actual_type) catch |err| switch (err) {
                     error.TypeError => {
-                        const expected_str = try expected_type.formatType(self.alloc);
-                        const actual_str = try actual_type.formatType(self.alloc);
+                        const expected_str = try type_serde.formatType(self.alloc, expected_type);
+                        const actual_str = try type_serde.formatType(self.alloc, actual_type);
                         try self.appendFailureReport(.ParseError, &.{
                             .{ .@"error" = try std.fmt.allocPrint(self.alloc, "default for `{s}` wants {s}, got {s}", .{ sig.param_names[idx], expected_str, actual_str }) },
                         });
@@ -1552,7 +1553,7 @@ pub const Compiler = struct {
             } else try self.compile(binding.value, true);
 
             const inferred_type = if (binding.type_name) |tn|
-                try type_check.evalTypeExpr(self, tn)
+                try type_serde.evalTypeExpr(self, tn)
             else
                 type_check.inferExprType(self, binding.value);
             try state_mod.setLocalTypeHint(self, name, inferred_type);
@@ -1656,7 +1657,7 @@ pub const Compiler = struct {
                 .slot = @intCast(idx),
                 .mutable = true,
                 .initialized = true,
-                .type_info = if (param.type_name) |tn| try type_check.evalTypeExpr(self, tn) else null,
+                .type_info = if (param.type_name) |tn| try type_serde.evalTypeExpr(self, tn) else null,
                 .type_explicit = param.type_name != null,
             };
             try fn_state.locals.append(self.alloc, local);
@@ -1664,7 +1665,7 @@ pub const Compiler = struct {
             if (param.type_name) |type_name| {
                 try fn_state.type_hints.append(self.alloc, .{
                     .name = param.name,
-                    .type_info = try type_check.evalTypeExpr(self, type_name),
+                    .type_info = try type_serde.evalTypeExpr(self, type_name),
                 });
             } else if (self_type != null and std.mem.eql(u8, param.name, "self")) {
                 // methods know their receiver's struct type even when `self`

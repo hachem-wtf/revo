@@ -16,6 +16,7 @@ const state = @import("state.zig");
 const toRegister = state.toRegister;
 const TypeHint = state.FunctionState.TypeHint;
 const type_check = @import("type_check.zig");
+const type_serde = @import("../type_serde.zig");
 const types_mod = @import("types.zig");
 
 pub const VarStorage = union(enum) {
@@ -121,7 +122,7 @@ pub fn compileRangeLoopBody(
     if (params.len >= 1 and !ast.isDiscardName(params[0].name)) {
         value_slot = try state.declareLocal(self, params[0].name, false);
         if (params[0].type_name) |tn| {
-            const declared = try type_check.evalTypeExpr(self, tn);
+            const declared = try type_serde.evalTypeExpr(self, tn);
             if (declared.tag != .number) {
                 const msg = try std.fmt.allocPrint(
                     self.alloc,
@@ -138,7 +139,7 @@ pub fn compileRangeLoopBody(
     if (params.len == 2 and !ast.isDiscardName(params[1].name)) {
         index_slot = try state.declareLocal(self, params[1].name, false);
         if (params[1].type_name) |tn| {
-            const declared = try type_check.evalTypeExpr(self, tn);
+            const declared = try type_serde.evalTypeExpr(self, tn);
             if (declared.tag != .number) {
                 const msg = try std.fmt.allocPrint(
                     self.alloc,

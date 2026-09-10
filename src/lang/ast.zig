@@ -1,4 +1,5 @@
 const std = @import("std");
+const type_serde = @import("type_serde.zig");
 
 pub const Span = struct {
     start: usize,
@@ -131,89 +132,6 @@ pub const TypeExpr = struct {
         },
         error_union: *TypeExpr,
     };
-
-    pub fn printAt(self: *const TypeExpr, writer: *std.Io.Writer, depth: ?usize) !void {
-        _ = depth;
-        switch (self.kind) {
-            .named => |name| try writer.writeAll(name),
-            // atom payloads come both bare (`nil` from the main parser)
-            // and colon-prefixed (`:nil` from the type parser)
-            .atom => |name| try writer.print(":{s}", .{atomName(name)}),
-            .tuple => |items| {
-                try writer.writeByte('(');
-                for (items, 0..) |item, i| {
-                    if (i > 0) try writer.writeAll(", ");
-                    try item.printAt(writer, null);
-                }
-                try writer.writeByte(')');
-            },
-            .union_of => |variants| {
-                // `T?` sugar, for a 2-union ending in `:nil`
-                if (variants.len == 2 and variants[1].kind == .atom and
-                    std.mem.eql(u8, atomName(variants[1].kind.atom), "nil"))
-                {
-                    try variants[0].printAt(writer, null);
-                    try writer.writeByte('?');
-                } else for (variants, 0..) |v, i| {
-                    if (i > 0) try writer.writeByte('|');
-                    try v.printAt(writer, null);
-                }
-            },
-            .qualified => |q| {
-                try writer.writeAll(q.module);
-                try writer.writeByte('.');
-                try writer.writeAll(q.name);
-            },
-            .record => |fields| {
-                try writer.writeByte('{');
-                for (fields, 0..) |f, i| {
-                    if (i > 0) try writer.writeAll(", ");
-                    // numeric names are positional array entries (`{ number, number }`)
-                    const positional = f.name.len > 0 and blk: {
-                        for (f.name) |c| if (!std.ascii.isDigit(c)) break :blk false;
-                        break :blk true;
-                    };
-                    if (!positional) {
-                        try writer.writeAll(f.name);
-                        try writer.writeAll(": ");
-                    }
-                    try f.type_expr.printAt(writer, null);
-                }
-                try writer.writeByte('}');
-            },
-            .function => |f| {
-                try writer.writeAll("fn(");
-                for (f.params, 0..) |p, i| {
-                    if (i > 0) try writer.writeAll(", ");
-                    if (p.name.len > 0) {
-                        try writer.writeAll(p.name);
-                        if (p.type_name != null) try writer.writeByte(':');
-                    }
-
-                    if (p.type_name) |t| try t.printAt(writer, null);
-                    if (p.variadic) try writer.writeAll("...");
-                }
-                try writer.writeByte(')');
-                if (f.return_type) |ret| {
-                    try writer.writeAll(" -> ");
-                    try ret.printAt(writer, null);
-                }
-            },
-            .parameterized => |p| {
-                try writer.writeAll(p.name);
-                try writer.writeByte('<');
-                for (p.params, 0..) |param, i| {
-                    if (i > 0) try writer.writeAll(", ");
-                    try param.printAt(writer, null);
-                }
-                try writer.writeByte('>');
-            },
-            .error_union => |inner| {
-                try writer.writeByte('!');
-                try inner.printAt(writer, null);
-            },
-        }
-    }
 };
 
 pub fn allocTypeExpr(allocator: std.mem.Allocator, span: Span, kind: TypeExpr.Kind) std.mem.Allocator.Error!*TypeExpr {
@@ -312,7 +230,7 @@ pub const Binding = struct {
             try self.target.printAt(writer, d + 1);
             if (self.type_name) |t| {
                 try writer.writeByte(':');
-                try t.printAt(writer, d + 1);
+                try type_serde.printTypeExpr(t, writer);
             }
             try writer.writeByte('\n');
             try writeIndent(writer, d + 1);
@@ -324,7 +242,7 @@ pub const Binding = struct {
             try self.target.printAt(writer, null);
             if (self.type_name) |t| {
                 try writer.writeByte(':');
-                try t.printAt(writer, null);
+                try type_serde.printTypeExpr(t, writer);
             }
             try writer.writeByte(' ');
             try self.value.printAt(writer, null);
@@ -587,13 +505,13 @@ pub const Node = struct {
                     try writer.writeAll(param.name);
                     if (param.type_name) |t| {
                         try writer.writeByte(':');
-                        try t.printAt(writer, null);
+                        try type_serde.printTypeExpr(t, writer);
                     }
                 }
                 try writer.writeByte(')');
                 if (fn_expr.return_type) |ret| {
                     try writer.writeAll(" -> ");
-                    try ret.printAt(writer, null);
+                    try type_serde.printTypeExpr(ret, writer);
                 }
                 try sep(writer, depth, 1);
                 try fn_expr.body.printAt(writer, child(depth));
@@ -661,7 +579,7 @@ pub const Node = struct {
                     try writer.writeAll(param.name);
                     if (param.type_name) |t| {
                         try writer.writeByte(':');
-                        try t.printAt(writer, null);
+                        try type_serde.printTypeExpr(t, writer);
                     }
                 }
                 try writer.writeAll(" in ");
@@ -728,7 +646,7 @@ pub const Node = struct {
                             try writer.print("(field {s}", .{field.name});
                             if (field.type_name) |t| {
                                 try writer.writeByte(':');
-                                try t.printAt(writer, null);
+                                try type_serde.printTypeExpr(t, writer);
                             }
                             if (field.default_value) |value| {
                                 try sep(writer, child(depth), 1);
@@ -792,7 +710,7 @@ pub const Node = struct {
             .type_alias => |t| {
                 try writer.print("(type {s}", .{t.name});
                 try sep(writer, depth, 1);
-                try t.type_expr.printAt(writer, null);
+                try type_serde.printTypeExpr(t.type_expr, writer);
                 try close(writer, depth);
             },
             .quasiquote => |qq| {

@@ -5,7 +5,7 @@ const VM = revo.VM;
 
 const lang = @import("./root.zig");
 const types = lang.types;
-const type_parser = @import("type_parser.zig");
+const type_serde = @import("type_serde.zig");
 const semantic = @import("semantic.zig");
 
 //
@@ -652,7 +652,7 @@ pub fn hover(
                 defer freeSymbols(alloc, @constCast(ms));
                 for (ms) |s| {
                     if (!std.mem.eql(u8, s.name, name)) continue;
-                    const sym_tn = if (s.type_name) |ti| try ti.formatType(alloc) else "";
+                    const sym_tn = if (s.type_name) |ti| try type_serde.formatType(alloc, ti) else "";
                     defer if (sym_tn.len > 0) alloc.free(sym_tn);
 
                     const display = try renderDefinition(alloc, name, sym_tn, self, fid);
@@ -686,7 +686,7 @@ pub fn hover(
             if (std.mem.eql(u8, sym.name, name) and
                 sym.range.start.line == def.range.start.line)
             {
-                type_name = if (sym.type_name) |ti| try ti.formatType(alloc) else "";
+                type_name = if (sym.type_name) |ti| try type_serde.formatType(alloc, ti) else "";
                 record_display = try renderRecordDisplay(alloc, sym);
                 break;
             }
@@ -696,7 +696,7 @@ pub fn hover(
         defer def_analysis.deinit(alloc);
         for (def_analysis.symbols) |sym| {
             if (std.mem.eql(u8, sym.name, name)) {
-                type_name = if (sym.type_name) |ti| try ti.formatType(alloc) else "";
+                type_name = if (sym.type_name) |ti| try type_serde.formatType(alloc, ti) else "";
                 record_display = try renderRecordDisplay(alloc, sym);
                 break;
             }
@@ -718,7 +718,7 @@ pub fn hover(
 
                 for (ms) |s| {
                     if (try self.fnSig(alloc, dep_id, s.name) != null) {
-                        const sym_tn = if (s.type_name) |ti| try ti.formatType(alloc) else "";
+                        const sym_tn = if (s.type_name) |ti| try type_serde.formatType(alloc, ti) else "";
                         defer if (sym_tn.len > 0) alloc.free(sym_tn);
 
                         const display = try renderDefinition(alloc, s.name, sym_tn, self, dep_id);
@@ -819,7 +819,7 @@ fn renderRecordWithValues(
             try buf.writer.writeAll(f.name);
             try buf.writer.writeAll(": ");
         }
-        const ft = try f.field_type.formatType(alloc);
+        const ft = try type_serde.formatType(alloc, f.field_type);
         defer alloc.free(ft);
         try buf.writer.writeAll(ft);
 
@@ -891,7 +891,7 @@ pub fn renderDefinition(
             try buf.writer.writeAll(p.name);
             if (p.optional) try buf.writer.writeByte('?');
             if (p.type_name) |ti| {
-                const pt = try ti.formatType(alloc);
+                const pt = try type_serde.formatType(alloc, ti);
                 defer alloc.free(pt);
                 try buf.writer.print(": {s}", .{pt});
             }
@@ -899,7 +899,7 @@ pub fn renderDefinition(
 
         try buf.writer.writeByte(')');
         if (sig.return_type) |rt| {
-            const rt_str = try rt.formatType(alloc);
+            const rt_str = try type_serde.formatType(alloc, rt);
             try buf.writer.print(" -> {s}", .{rt_str});
         }
 
@@ -935,7 +935,7 @@ pub fn signatureHelp(
             for (spec.params, 0..) |p, i| {
                 // parseTypeString can return shared comptime sentinels
                 const pt: ?types.TypeInfo = if (p[1].len > 0) pt: {
-                    const t = try type_parser.parseTypeString(type_parser.BareCtx{ .alloc = alloc }, p[1]);
+                    const t = try type_serde.parseTypeString(type_serde.BareCtx{ .alloc = alloc }, p[1]);
                     break :pt try types.clone(t, alloc);
                 } else null;
                 params[i] = .{
@@ -945,7 +945,7 @@ pub fn signatureHelp(
             }
 
             const ret: ?types.TypeInfo = if (spec.ret.len > 0) ret: {
-                const t = try type_parser.parseTypeString(type_parser.BareCtx{ .alloc = alloc }, spec.ret);
+                const t = try type_serde.parseTypeString(type_serde.BareCtx{ .alloc = alloc }, spec.ret);
                 break :ret try types.clone(t, alloc);
             } else null;
 
@@ -1250,7 +1250,7 @@ pub fn inlayHints(
             defer alloc.free(decl_needle);
             if (std.mem.indexOf(u8, line, decl_needle) != null) {
                 if (std.mem.indexOf(u8, line, "->") != null or ti.tag.function.return_type.tag == .any) continue;
-                const ret = try ti.tag.function.return_type.formatType(alloc);
+                const ret = try type_serde.formatType(alloc, ti.tag.function.return_type);
                 defer alloc.free(ret);
 
                 var paren = sym.range.end.character;
@@ -1266,7 +1266,7 @@ pub fn inlayHints(
             }
         }
 
-        const tn = try ti.formatType(alloc);
+        const tn = try type_serde.formatType(alloc, ti);
         defer alloc.free(tn);
         const needle = try std.fmt.allocPrint(alloc, ": {s}", .{tn});
         defer alloc.free(needle);
@@ -1370,7 +1370,7 @@ pub fn hoverByName(
         sym_range = sym.range; // last binding wins
         if (sym.type_name) |ti| {
             if (type_name.len > 0) alloc.free(type_name);
-            type_name = try ti.formatType(alloc);
+            type_name = try type_serde.formatType(alloc, ti);
         }
     }
     if (doc == null and sig == null and sym_range == null) return null;
@@ -1930,7 +1930,7 @@ const SigVisitor = struct {
     /// parseTypeString can return shared comptime sentinels or strings borrowing ast
     /// sig_map can outlive both so we need deepcopy
     fn ownedType(self: *@This(), te: *const lang.ast.TypeExpr) ?types.TypeInfo {
-        const t = type_parser.evalTypeExpr(type_parser.BareCtx{ .alloc = self.alloc }, te) catch return null;
+        const t = type_serde.evalTypeExpr(type_serde.BareCtx{ .alloc = self.alloc }, te) catch return null;
         return types.clone(t, self.alloc) catch null;
     }
 
@@ -2908,7 +2908,7 @@ fn localFieldCompletions(
     var added = false;
     for (fields) |f| {
         if (!std.mem.startsWith(u8, f.name, prefix)) continue;
-        const detail = f.field_type.formatType(arena) catch return added;
+        const detail = type_serde.formatType(arena, f.field_type) catch return added;
         items.append(arena, .{
             .label = f.name,
             .kind = .field,
@@ -3112,14 +3112,14 @@ fn addGeneralCompletions(
                         const param_types = try arena.alloc([]const u8, sig.params.len);
                         for (sig.params, 0..) |p, i| {
                             names[i] = p.name;
-                            param_types[i] = if (p.type_name) |ti| try ti.formatType(arena) else "";
+                            param_types[i] = if (p.type_name) |ti| try type_serde.formatType(arena, ti) else "";
                         }
                         const cs = try callSignature(
                             arena,
                             sym.name,
                             names,
                             param_types,
-                            if (sig.return_type) |rt| try rt.formatType(arena) else null,
+                            if (sig.return_type) |rt| try type_serde.formatType(arena, rt) else null,
                         );
                         detail = cs.detail;
                         insert_text = cs.insert_text;

@@ -1,3 +1,17 @@
+//!
+//! welcome to our type serde
+//!
+//! all type text conversion is here: text -> TypeExpr -> TypeInfo and back
+//! the two mirrors (parse/printTypeExpr, evalTypeExpr/toTypeExpr) must stay in sync
+//!     keep them adjacent.
+//!
+//! the ast <-> type_serde cycle is intentional:
+//! Node printing embeds type printing, so ast calls printTypeExpr while this module
+//! operates on ast.TypeExpr
+//! type refs flow one way (here -> ast only)
+//! dont add comptime cross-refs
+//! same shape as the revo <-> vm cycle
+
 const std = @import("std");
 const ast = @import("ast.zig");
 const Lexer = @import("Lexer.zig");
@@ -267,7 +281,7 @@ fn flattenUnion(alloc: std.mem.Allocator, variants: *std.ArrayList(*ast.TypeExpr
 
 /// type ast back into a TypeInfo
 /// every TypeExpr kind must be handled here; this is the single place where AST type
-/// nodes becomes semantic TypeInfo values
+/// nodes becomes semantic TypeInfo values. mirrors toTypeExpr below
 /// ctx must support .alloc, .isTypeParam(name) -> bool, and .resolveTypeAlias(name) -> ?TypeInfo
 pub fn evalTypeExpr(ctx: anytype, te: *const ast.TypeExpr) !TypeInfo {
     switch (te.kind) {
@@ -376,213 +390,201 @@ pub fn evalTypeExpr(ctx: anytype, te: *const ast.TypeExpr) !TypeInfo {
     }
 }
 
-/// ======================= pub iface of mod ast ==========================
-/// this bhv shold be
-/// ~ record type for the import binding & resolved type aliases
-/// ~ pub fn bindings get signature types (dep generics scoped correctly)
-/// ~ pub consts get literal-inferred types (or any)
-/// ~ pub structs get struct types, pub re-exports get any
-///   (really dont care about this one since structs will go anyways)
-/// ~ non pub items are skipped
-///
-/// ~ type aliases are compile-time only (not values)
-/// ~ record is null when nothing is exported: such modules evaluate to
-///   their last expression, not a table, so the import stays untyped
-///   (TOOD: give them types like all real closures)
-/// ~ dep-local names resolve inside the dep, never in importer scope,,, all hermetic
-/// ~ names borrow dep src
-/// =======================================================================
-pub const ModuleAlias = struct {
-    name: []const u8,
-    info: TypeInfo,
-};
+const empty_span: ast.Span = .{ .start = 0, .end = 0, .line = 0, .column = 0 };
 
-pub const ModuleIface = struct {
-    record: ?TypeInfo,
-    aliases: []const ModuleAlias,
-};
+fn namedExpr(alloc: std.mem.Allocator, name: []const u8) !*ast.TypeExpr {
+    return try ast.allocTypeExpr(alloc, empty_span, .{ .named = name });
+}
 
-pub fn moduleInterface(alloc: std.mem.Allocator, items: []const *ast.Node) !ModuleIface {
-    var mctx = ModuleCtx{
-        .alloc = alloc,
-        .raws = std.StringHashMap(*ast.TypeExpr).init(alloc),
-        .stack = try std.ArrayList([]const u8).initCapacity(alloc, 4),
-    };
-    defer mctx.raws.deinit();
-    defer mctx.stack.deinit(alloc);
-    // pre-collect every alias raw (pub or not) so forward references
-    // and private bases resolve; only pub names are exported below
-    for (items) |item| {
-        if (item.expr != .decl) continue;
-        const d = item.expr.decl;
-        if (d.inner.expr == .type_alias) {
-            try mctx.raws.put(d.inner.expr.type_alias.name, d.inner.expr.type_alias.type_expr);
-        }
-    }
-    var out = try std.ArrayList(types.RecordField).initCapacity(alloc, items.len);
-    errdefer out.deinit(alloc);
-    for (items) |item| try moduleExportInto(&mctx, item, &out);
-    var aliases = try std.ArrayList(ModuleAlias).initCapacity(alloc, mctx.raws.count());
-    errdefer aliases.deinit(alloc);
-    for (items) |item| {
-        if (item.expr != .decl) continue;
-        const d = item.expr.decl;
-        if (!d.pub_ or d.inner.expr != .type_alias) continue;
-        const name = d.inner.expr.type_alias.name;
-        if (mctx.resolveTypeAlias(name)) |t| {
-            try aliases.append(alloc, .{ .name = name, .info = t });
-        }
-    }
-    if (out.items.len == 0) return .{ .record = null, .aliases = try aliases.toOwnedSlice(alloc) };
-    const value = try alloc.create(TypeInfo);
-    value.* = .{ .tag = .any };
-    return .{
-        .record = types.makeTable(null, value, try out.toOwnedSlice(alloc)),
-        .aliases = try aliases.toOwnedSlice(alloc),
+/// semantic TypeInfo back into syntax form for printing; mirrors
+/// evalTypeExpr above, names borrow self
+fn toTypeExpr(alloc: std.mem.Allocator, ti: TypeInfo) std.mem.Allocator.Error!*ast.TypeExpr {
+    return switch (ti.tag) {
+        .bool => try namedExpr(alloc, "bool"),
+        .number => try namedExpr(alloc, "number"),
+        .string => try namedExpr(alloc, "string"),
+        .any => try namedExpr(alloc, "any"),
+        .never => try namedExpr(alloc, "never"),
+        .type_var => |n| try namedExpr(alloc, n),
+        .struct_type => |n| try namedExpr(alloc, n),
+        // empty atom payload is the "any atom" sentinel
+        .atom => |s| if (s.len == 0) try namedExpr(alloc, "atom") else try ast.allocTypeExpr(alloc, empty_span, .{ .atom = ast.atomName(s) }),
+        // empty tuple is the "any tuple" sentinel
+        .tuple => |items| if (items.len == 0) try namedExpr(alloc, "tuple") else blk: {
+            const owned = try alloc.alloc(*ast.TypeExpr, items.len);
+            for (items, owned) |item, *dst| dst.* = try toTypeExpr(alloc, item);
+            break :blk try ast.allocTypeExpr(alloc, empty_span, .{ .tuple = owned });
+        },
+        .@"union" => |variants| blk: {
+            const owned = try alloc.alloc(*ast.TypeExpr, variants.len);
+            for (variants, owned) |v, *dst| {
+                const inner = if (v.types.len == 1) try toTypeExpr(alloc, v.types[0]) else blk2: {
+                    const items = try alloc.alloc(*ast.TypeExpr, v.types.len);
+                    for (v.types, items) |vt, *d| d.* = try toTypeExpr(alloc, vt);
+                    break :blk2 try ast.allocTypeExpr(alloc, empty_span, .{ .tuple = items });
+                };
+                dst.* = inner;
+            }
+            break :blk try ast.allocTypeExpr(alloc, empty_span, .{ .union_of = owned });
+        },
+        .table => |tbl| blk: {
+            // known fields render as records, same precedence as before
+            if (tbl.fields) |fields| {
+                const owned = try alloc.alloc(ast.RecordField, fields.len);
+                for (fields, owned) |f, *dst| dst.* = .{
+                    .name = f.name,
+                    .type_expr = try toTypeExpr(alloc, f.field_type),
+                };
+                break :blk try ast.allocTypeExpr(alloc, empty_span, .{ .record = owned });
+            }
+            // bare `table` stays bare
+            if (tbl.key == null and tbl.value.tag == .any) break :blk try namedExpr(alloc, "table");
+            var params = try std.ArrayList(*ast.TypeExpr).initCapacity(alloc, 2);
+            if (tbl.key) |k| try params.append(alloc, try toTypeExpr(alloc, k.*));
+            try params.append(alloc, try toTypeExpr(alloc, tbl.value.*));
+            break :blk try ast.allocTypeExpr(alloc, empty_span, .{
+                .parameterized = .{ .name = "table", .params = try params.toOwnedSlice(alloc) },
+            });
+        },
+        .function => |sig| blk: {
+            const params = try alloc.alloc(ast.FnParam, sig.params.len);
+            for (sig.params, 0..) |p, i| {
+                const name = if (i < sig.param_names.len) sig.param_names[i] else "";
+                params[i] = .{
+                    .name = name,
+                    .name_span = empty_span,
+                    .type_name = try toTypeExpr(alloc, p),
+                };
+            }
+            const ret = try toTypeExpr(alloc, sig.return_type);
+            break :blk try ast.allocTypeExpr(alloc, empty_span, .{
+                .function = .{ .params = params, .return_type = ret },
+            });
+        },
     };
 }
 
-/// evaluation scope for one module's interface
-/// ~ dep aliases resolve here  (never in the importer's scope)
-/// ~ fn type params scope per fn
-const ModuleCtx = struct {
-    alloc: std.mem.Allocator,
-    raws: std.StringHashMap(*ast.TypeExpr),
-    stack: std.ArrayList([]const u8),
-    type_params: []const []const u8 = &.{},
-
-    pub fn isTypeParam(self: *const ModuleCtx, name: []const u8) bool {
-        for (self.type_params) |tp| if (std.mem.eql(u8, tp, name)) return true;
-        return false;
-    }
-
-    pub fn resolveTypeAlias(self: *ModuleCtx, name: []const u8) ?TypeInfo {
-        const raw = self.raws.get(name) orelse return null;
-        for (self.stack.items) |s| if (std.mem.eql(u8, s, name)) return null;
-        self.stack.append(self.alloc, name) catch return null;
-        defer _ = self.stack.pop();
-        return evalTypeExpr(self, raw) catch null;
-    }
-
-    /// qualified refs inside deps (dep on dep types) stay unresolved
-    /// resolving them would recurse into subdep interfaces
-    pub fn resolveImportAlias(_: *ModuleCtx, _: []const u8, _: []const u8) ?TypeInfo {
-        return null;
-    }
-
-    pub fn inferIdentType(_: *ModuleCtx, _: []const u8) TypeInfo {
-        return .{ .tag = .any };
-    }
-
-    pub fn inferCallReturnType(
-        _: *ModuleCtx,
-        _: *const ast.Node,
-        _: []const *ast.Node,
-        _: []const []const u8,
-        _: bool,
-    ) TypeInfo {
-        return .{ .tag = .any };
-    }
-
-    pub fn inferFieldType(_: *ModuleCtx, _: *const ast.Node, _: []const u8) TypeInfo {
-        return .{ .tag = .any };
-    }
-
-    pub fn inferFnType(
-        self: *ModuleCtx,
-        params: []const ast.FnParam,
-        return_type: ?*ast.TypeExpr,
-        type_params: []const []const u8,
-        doc: ?[]const u8,
-    ) TypeInfo {
-        const saved = self.type_params;
-        self.type_params = type_params;
-        defer self.type_params = saved;
-
-        var param_types = std.ArrayList(TypeInfo).initCapacity(self.alloc, params.len) catch return .{ .tag = .any };
-        defer param_types.deinit(self.alloc);
-        var param_names = std.ArrayList([]const u8).initCapacity(self.alloc, params.len) catch return .{ .tag = .any };
-        defer param_names.deinit(self.alloc);
-        var required: usize = 0;
-
-        for (params) |p| {
-            param_names.append(self.alloc, p.name) catch return .{ .tag = .any };
-            param_types.append(self.alloc, if (p.type_name) |tn| evalTypeExpr(self, tn) catch .{ .tag = .any } else .{ .tag = .any }) catch return .{ .tag = .any };
-            if (!p.optional and p.default_value == null) required += 1;
-        }
-
-        const owned_params = param_types.toOwnedSlice(self.alloc) catch return .{ .tag = .any };
-        errdefer self.alloc.free(owned_params);
-        const owned_names = param_names.toOwnedSlice(self.alloc) catch return .{ .tag = .any };
-        errdefer self.alloc.free(owned_names);
-
-        const ret: TypeInfo = if (return_type) |rt|
-            evalTypeExpr(self, rt) catch .{ .tag = .any }
-        else
-            .{ .tag = .any };
-
-        const sig = types.newSignature(self.alloc, .{
-            .param_names = owned_names,
-            .params = owned_params,
-            .return_type = ret,
-            .required_count = required,
-            .type_params = type_params,
-            .doc = doc,
-        }) catch return .{ .tag = .any };
-        return .{ .tag = .{ .function = sig } };
-    }
-};
-
-fn moduleExportInto(mctx: *ModuleCtx, node: *const ast.Node, out: *std.ArrayList(types.RecordField)) !void {
-    const alloc = mctx.alloc;
-    switch (node.expr) {
-        .decl => |d| {
-            // .d.rv manifests declare host contracts
-            if (d.kind == .declare_decl and d.inner.expr == .type_alias) {
-                if (!d.pub_) return;
-                const t = d.inner.expr.type_alias;
-                const ft = evalTypeExpr(mctx, t.type_expr) catch TypeInfo{ .tag = .any };
-                try out.append(alloc, .{ .name = t.name, .field_type = ft });
-                return;
+/// render a TypeExpr via printTypeExpr; mirrors parse above
+pub fn printTypeExpr(te: *const ast.TypeExpr, writer: *std.Io.Writer) !void {
+    switch (te.kind) {
+        .named => |name| try writer.writeAll(name),
+        // atom payloads come both bare (`nil` from the main parser)
+        // and colon-prefixed (`:nil` from the type parser)
+        .atom => |name| try writer.print(":{s}", .{ast.atomName(name)}),
+        .tuple => |items| {
+            try writer.writeByte('(');
+            for (items, 0..) |item, i| {
+                if (i > 0) try writer.writeAll(", ");
+                try printTypeExpr(item, writer);
             }
-            if (!d.pub_) return;
-            switch (d.inner.expr) {
-                .binding => |b| {
-                    if (b.target.expr != .ident) return;
-                    try out.append(alloc, .{
-                        .name = b.target.expr.ident,
-                        // inferred with the module ctx: unknown names
-                        // degrade to any inside inference, so nothing
-                        // leaks across scopes
-                        .field_type = types.inferExprType(mctx, b.value),
-                    });
-                },
-                .struct_def => |def| try out.append(alloc, .{
-                    .name = def.name,
-                    .field_type = .{ .tag = .{ .struct_type = def.name } },
-                }),
-                // type aliases are compile-time only so skip them
-                else => {},
+            try writer.writeByte(')');
+        },
+        .union_of => |variants| {
+            // `T?` sugar, for a 2-union ending in `:nil`
+            if (variants.len == 2 and variants[1].kind == .atom and
+                std.mem.eql(u8, ast.atomName(variants[1].kind.atom), "nil"))
+            {
+                try printTypeExpr(variants[0], writer);
+                try writer.writeByte('?');
+            } else for (variants, 0..) |v, i| {
+                if (i > 0) try writer.writeByte('|');
+                try printTypeExpr(v, writer);
             }
         },
-        // re-exports resolve in sub-dep scope, not here
-        // were it not any-typed, the reads could false-flag
-        .import_stmt => |stmt| if (stmt.pub_) try out.append(alloc, .{
-            .name = stmt.name,
-            .field_type = .{ .tag = .any },
-        }),
-        else => {},
+        .qualified => |q| {
+            try writer.writeAll(q.module);
+            try writer.writeByte('.');
+            try writer.writeAll(q.name);
+        },
+        .record => |fields| {
+            try writer.writeByte('{');
+            for (fields, 0..) |f, i| {
+                if (i > 0) try writer.writeAll(", ");
+                // numeric names are positional array entries (`{ number, number }`)
+                const positional = f.name.len > 0 and blk: {
+                    for (f.name) |c| if (!std.ascii.isDigit(c)) break :blk false;
+                    break :blk true;
+                };
+                if (!positional) {
+                    try writer.writeAll(f.name);
+                    try writer.writeAll(": ");
+                }
+                try printTypeExpr(f.type_expr, writer);
+            }
+            try writer.writeByte('}');
+        },
+        .function => |f| {
+            try writer.writeAll("fn(");
+            for (f.params, 0..) |p, i| {
+                if (i > 0) try writer.writeAll(", ");
+                if (p.name.len > 0) {
+                    try writer.writeAll(p.name);
+                    if (p.type_name != null) try writer.writeByte(':');
+                }
+
+                if (p.type_name) |t| try printTypeExpr(t, writer);
+                if (p.variadic) try writer.writeAll("...");
+            }
+            try writer.writeByte(')');
+            if (f.return_type) |ret| {
+                try writer.writeAll(" -> ");
+                try printTypeExpr(ret, writer);
+            }
+        },
+        .parameterized => |p| {
+            try writer.writeAll(p.name);
+            try writer.writeByte('<');
+            for (p.params, 0..) |param, i| {
+                if (i > 0) try writer.writeAll(", ");
+                try printTypeExpr(param, writer);
+            }
+            try writer.writeByte('>');
+        },
+        .error_union => |inner| {
+            try writer.writeByte('!');
+            try printTypeExpr(inner, writer);
+        },
     }
 }
 
-test "pos record roundtrips w/o numeric names" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const alloc = arena.allocator();
+/// render a TypeInfo via printTypeExpr: build syntax form,
+/// print it, drop transient tree (names borrow self, like eval)
+pub fn formatType(alloc: std.mem.Allocator, ti: TypeInfo) std.mem.Allocator.Error![]const u8 {
+    var buf = std.Io.Writer.Allocating.init(alloc);
+    errdefer buf.deinit();
+    const te = try toTypeExpr(alloc, ti);
+    // the allocating writer only fails on oom; printTypeExpr is generic
+    // over writers so its error set is wider than what happens here
+    printTypeExpr(te, &buf.writer) catch |err| {
+        if (err != error.OutOfMemory) unreachable;
+        return error.OutOfMemory;
+    };
+    return try buf.toOwnedSlice();
+}
 
-    const mixed = try parseTypeString(BareCtx{ .alloc = alloc }, "{number, number, name: string}");
-    try std.testing.expectEqualStrings("{number, number, name: string}", try mixed.formatType(alloc));
+test "type serde roundtrips" {
+    const cases = [_][]const u8{
+        "{number, number, name: string}",
+        "{number, :err, atom}",
+        "{name: string}",
+        "{}",
+        "number?",
+        "(:ok, table) | (:err, any)",
+        "fn() -> string",
+        "fn(a: number) -> string",
+        "fn(?a: number) -> string", // optional param a; must match the one in non-type revo code
+        "table<string, number>",
+        "(:ok, any) | (:err, any)",
+        "{user: {name: string}}",
+        "{:ok, any}",
+        "{:ok, any} | {:err, any}",
+    };
+    for (cases) |c| {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const alloc = arena.allocator();
 
-    const atoms = try parseTypeString(BareCtx{ .alloc = alloc }, "{number, :err, atom}");
-    try std.testing.expectEqualStrings("{number, :err, atom}", try atoms.formatType(alloc));
+        const ti = try parseTypeString(BareCtx{ .alloc = alloc }, c);
+        try std.testing.expectEqualStrings(c, try formatType(alloc, ti));
+    }
 }

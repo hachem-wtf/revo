@@ -12,6 +12,7 @@ const state = @import("state.zig");
 const ir = @import("../ir/root.zig");
 const toRegister = state.toRegister;
 const type_check = @import("type_check.zig");
+const type_serde = @import("../type_serde.zig");
 const types_mod = @import("types.zig");
 
 pub const BindingKind = enum { global, let, con };
@@ -69,7 +70,7 @@ pub fn compileLocalBinding(
     );
 
     const inferred_type = if (type_name) |tn|
-        try type_check.evalTypeExpr(self, tn)
+        try type_serde.evalTypeExpr(self, tn)
     else
         type_check.inferExprType(self, value);
 
@@ -440,7 +441,7 @@ pub fn compileStruct(
             } else {
                 try seen.put(fname, true);
                 const field_type: types_mod.TypeInfo = if (item.field.type_name) |tn|
-                    try type_check.evalTypeExpr(self, tn)
+                    try type_serde.evalTypeExpr(self, tn)
                 else
                     .{ .tag = .any };
                 try field_defs.append(self.alloc, .{
