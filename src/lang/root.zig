@@ -4,6 +4,7 @@ pub const expander = @import("expander.zig");
 pub const proc = @import("proc.zig");
 pub const Lexer = @import("Lexer.zig");
 pub const parser = @import("Parser.zig");
+pub const type_serde = @import("type_serde.zig");
 pub const diagnostic = @import("diagnostic.zig");
 pub const testing = @import("testing.zig");
 pub const tests = @import("tests.zig");
@@ -81,6 +82,7 @@ test {
     _ = @import("proc.zig");
     _ = @import("Lexer.zig");
     _ = @import("Parser.zig");
+    _ = @import("type_serde.zig");
     _ = @import("testing.zig");
     _ = @import("tests.zig");
     _ = @import("semantic.zig");

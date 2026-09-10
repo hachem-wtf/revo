@@ -8,6 +8,7 @@ const types_mod = @import("types.zig");
 pub const TypeInfo = types_mod.TypeInfo;
 const FunctionSignature = types_mod.FunctionSignature;
 const state_mod = @import("state.zig");
+const type_serde = @import("../type_serde.zig");
 
 pub fn checkType(expected: TypeInfo, actual: TypeInfo) !void {
     if (expected.tag == .any or actual.tag == .any) return;
@@ -15,8 +16,6 @@ pub fn checkType(expected: TypeInfo, actual: TypeInfo) !void {
     if (types_mod.canCoerce(actual, expected)) return;
     return error.TypeError;
 }
-
-pub const evalTypeExpr = @import("../type_parser.zig").evalTypeExpr;
 
 pub fn inferExprType(self: *Compiler, node: *const Node) TypeInfo {
     if (self.type_annotations) |map| {
@@ -177,11 +176,11 @@ pub fn inferFnType(
     var param_names = std.ArrayList([]const u8).initCapacity(self.alloc, params.len) catch return .{ .tag = .any };
     defer param_names.deinit(self.alloc);
     for (params) |p| {
-        const pt = if (p.type_name) |tn| evalTypeExpr(self, tn) catch TypeInfo{ .tag = .any } else TypeInfo{ .tag = .any };
+        const pt = if (p.type_name) |tn| type_serde.evalTypeExpr(self, tn) catch TypeInfo{ .tag = .any } else TypeInfo{ .tag = .any };
         param_types.append(self.alloc, pt) catch return .{ .tag = .any };
         param_names.append(self.alloc, p.name) catch return .{ .tag = .any };
     }
-    const ret = if (return_type) |rt| evalTypeExpr(self, rt) catch TypeInfo{ .tag = .any } else TypeInfo{ .tag = .any };
+    const ret = if (return_type) |rt| type_serde.evalTypeExpr(self, rt) catch TypeInfo{ .tag = .any } else TypeInfo{ .tag = .any };
     const sig = self.alloc.create(FunctionSignature) catch return .{ .tag = .any };
     sig.* = .{
         .param_names = param_names.toOwnedSlice(self.alloc) catch return TypeInfo{ .tag = .any },

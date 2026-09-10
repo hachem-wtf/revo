@@ -454,7 +454,7 @@ pub fn specFromDecl(alloc: std.mem.Allocator, alias: ast.TypeAlias, doc: ?[]cons
         var doc_buf = std.Io.Writer.Allocating.init(alloc);
         defer doc_buf.deinit();
         try doc_buf.writer.writeAll("alias for `");
-        try alias.type_expr.printAt(&doc_buf.writer, null);
+        try revo.lang.type_serde.printTypeExpr(alias.type_expr, &doc_buf.writer);
         try doc_buf.writer.writeAll("`");
 
         if (doc) |d| {
@@ -486,7 +486,7 @@ fn specFromStruct(alloc: std.mem.Allocator, s: anytype, doc: []const u8) !FnSpec
                 const fdoc = f.doc orelse continue;
                 var type_buf = std.Io.Writer.Allocating.init(alloc);
                 defer type_buf.deinit();
-                if (f.type_name) |tn| try tn.printAt(&type_buf.writer, null);
+                if (f.type_name) |tn| try revo.lang.type_serde.printTypeExpr(tn, &type_buf.writer);
                 try fields.append(alloc, .{
                     .name = try alloc.dupe(u8, f.name),
                     .type_text = try alloc.dupe(u8, type_buf.written()),
@@ -534,7 +534,7 @@ pub fn specFromFn(
     for (params_in) |p| {
         rendered.clearRetainingCapacity();
         if (p.type_name) |tn| {
-            try tn.printAt(&rendered.writer, null);
+            try revo.lang.type_serde.printTypeExpr(tn, &rendered.writer);
         } else if (strict) {
             return error.IfaceParamNotTyped;
         }
@@ -560,7 +560,7 @@ pub fn specFromFn(
 
     var ret = std.Io.Writer.Allocating.init(alloc);
     defer ret.deinit();
-    if (return_type) |r| try r.printAt(&ret.writer, null);
+    if (return_type) |r| try revo.lang.type_serde.printTypeExpr(r, &ret.writer);
 
     const sig = if (ret.written().len > 0)
         try std.fmt.allocPrint(alloc, "{s}({s}) -> {s}", .{ head, args.items, ret.written() })

@@ -6,7 +6,8 @@ const ast = @import("./ast.zig");
 const diagnostic = @import("diagnostic.zig");
 const struct_layout = @import("compiler/types.zig");
 const types_mod = @import("compiler/types.zig");
-const type_parser = @import("type_parser.zig");
+const type_serde = @import("type_serde.zig");
+const module_iface = @import("module_iface.zig");
 const revo = @import("revo");
 
 pub const ModuleResolver = struct {
@@ -440,7 +441,7 @@ const SemanticChecker = struct {
                             if (fields.get(name) != null) return;
                         }
                     }
-                    const obj_str = try object_type.formatType(self.alloc);
+                    const obj_str = try type_serde.formatType(self.alloc, object_type);
                     const msg = try std.fmt.allocPrint(self.alloc, "field `{s}` is not defined on {s}", .{ name, obj_str });
                     try self.appendError(msg, span, "unknown field");
                 }
@@ -479,7 +480,7 @@ const SemanticChecker = struct {
     /// user annotation: validate qualified names, then evaluate
     fn evalCheckedTypeExpr(self: *SemanticChecker, te: *const ast.TypeExpr) !types_mod.TypeInfo {
         try self.checkQualifiedTypes(te);
-        return try type_parser.evalTypeExpr(self, te);
+        return try type_serde.evalTypeExpr(self, te);
     }
 
     pub fn inferFieldType(self: *SemanticChecker, object: *const ast.Node, name: []const u8) types_mod.TypeInfo {
@@ -546,7 +547,7 @@ const SemanticChecker = struct {
 
     fn makeStdlibSig(self: *SemanticChecker, spec: *const revo.std_lib.api.FnSpec) !?*const FnSig {
         if (self.sig_cache.get(spec)) |sig| return sig;
-        const type_params = try type_parser.sigTypeParams(self.alloc, spec.sig);
+        const type_params = try type_serde.sigTypeParams(self.alloc, spec.sig);
         const saved = self.current_type_params;
         self.current_type_params = type_params;
         defer self.current_type_params = saved;
@@ -556,13 +557,13 @@ const SemanticChecker = struct {
 
         for (spec.params) |p| {
             try param_names.append(self.alloc, p[0]);
-            try param_types.append(self.alloc, type_parser.parseTypeString(self, p[1]) catch types_mod.TypeInfo{ .tag = .any });
+            try param_types.append(self.alloc, type_serde.parseTypeString(self, p[1]) catch types_mod.TypeInfo{ .tag = .any });
         }
 
         const names_slice = try param_names.toOwnedSlice(self.alloc);
         const types_slice = try param_types.toOwnedSlice(self.alloc);
 
-        const ret = type_parser.parseTypeString(self, spec.ret) catch types_mod.TypeInfo{ .tag = .any };
+        const ret = type_serde.parseTypeString(self, spec.ret) catch types_mod.TypeInfo{ .tag = .any };
         const sig = try types_mod.newSignature(self.alloc, .{
             .param_names = names_slice,
             .params = types_slice,
@@ -688,7 +689,7 @@ const SemanticChecker = struct {
                     .add, .sub, .div, .int_div, .mod, .pow => {
                         if ((l.tag == .number and r.tag == .string) or (l.tag == .string and r.tag == .number)) {
                             try self.appendError(
-                                try std.fmt.allocPrint(self.alloc, "cannot {s} {s} and {s}", .{ @tagName(b.op), try l.formatType(self.alloc), try r.formatType(self.alloc) }),
+                                try std.fmt.allocPrint(self.alloc, "cannot {s} {s} and {s}", .{ @tagName(b.op), try type_serde.formatType(self.alloc, l), try type_serde.formatType(self.alloc, r) }),
                                 node.span,
                                 "invalid operands",
                             );
@@ -697,7 +698,7 @@ const SemanticChecker = struct {
                     .mul => {
                         if (l.tag != .any and r.tag != .any and (l.tag != .number or r.tag != .number)) {
                             try self.appendError(
-                                try std.fmt.allocPrint(self.alloc, "cannot multiply {s} and {s}", .{ try l.formatType(self.alloc), try r.formatType(self.alloc) }),
+                                try std.fmt.allocPrint(self.alloc, "cannot multiply {s} and {s}", .{ try type_serde.formatType(self.alloc, l), try type_serde.formatType(self.alloc, r) }),
                                 node.span,
                                 "invalid operands",
                             );
@@ -707,7 +708,7 @@ const SemanticChecker = struct {
                     .band, .bor, .bxor, .shl, .shr => {
                         if (l.tag != .any and r.tag != .any and (l.tag != .number or r.tag != .number)) {
                             try self.appendError(
-                                try std.fmt.allocPrint(self.alloc, "cannot apply {s} to {s} and {s}", .{ @tagName(b.op), try l.formatType(self.alloc), try r.formatType(self.alloc) }),
+                                try std.fmt.allocPrint(self.alloc, "cannot apply {s} to {s} and {s}", .{ @tagName(b.op), try type_serde.formatType(self.alloc, l), try type_serde.formatType(self.alloc, r) }),
                                 node.span,
                                 "invalid operands",
                             );
@@ -732,7 +733,7 @@ const SemanticChecker = struct {
                 const inner_type = try self.analyzeNode(inner);
                 if (inner_type.tag != .any and !types_mod.isResultType(inner_type)) {
                     try self.appendError(
-                        try std.fmt.allocPrint(self.alloc, "try expects :ok/:err tagged tuple, got {s}", .{try inner_type.formatType(self.alloc)}),
+                        try std.fmt.allocPrint(self.alloc, "try expects :ok/:err tagged tuple, got {s}", .{try type_serde.formatType(self.alloc, inner_type)}),
                         inner.span,
                         "not a result type",
                     );
@@ -832,7 +833,7 @@ const SemanticChecker = struct {
                 const pred_type = try self.analyzeNode(v.predicate);
                 if (!types_mod.canCoerce(pred_type, .{ .tag = .bool })) {
                     try self.appendError(
-                        try std.fmt.allocPrint(self.alloc, "while predicate must be boolean, got {s}", .{try pred_type.formatType(self.alloc)}),
+                        try std.fmt.allocPrint(self.alloc, "while predicate must be boolean, got {s}", .{try type_serde.formatType(self.alloc, pred_type)}),
                         v.predicate.span,
                         "expected bool",
                     );
@@ -852,7 +853,7 @@ const SemanticChecker = struct {
                         else => &[_]*ast.Node{@constCast(dep)},
                     };
 
-                    if (type_parser.moduleInterface(self.alloc, items)) |iface| {
+                    if (module_iface.moduleInterface(self.alloc, items)) |iface| {
                         var aliases = std.StringHashMap(types_mod.TypeInfo).init(self.alloc);
                         for (iface.aliases) |a| try aliases.put(a.name, a.info);
                         try self.import_aliases.put(stmt.name, aliases);
@@ -1283,7 +1284,7 @@ const SemanticChecker = struct {
                         "here",
                     );
                 } else if (!types_mod.canCoerce(types_mod.TABLE_GENERIC, actual_type)) {
-                    const name_str = try actual_type.formatType(self.alloc);
+                    const name_str = try type_serde.formatType(self.alloc, actual_type);
 
                     try self.appendError(
                         try std.fmt.allocPrint(self.alloc, "mutation is not allowed for {s}", .{name_str}),
@@ -1379,8 +1380,8 @@ const SemanticChecker = struct {
                         if (fd.field_type.tag == .any) break;
                         const actual = types_mod.inferExprType(self, entry.value);
                         if (!numberAccepts(fd.field_type, actual)) {
-                            const actual_str = try actual.formatType(self.alloc);
-                            const expected_str = try fd.field_type.formatType(self.alloc);
+                            const actual_str = try type_serde.formatType(self.alloc, actual);
+                            const expected_str = try type_serde.formatType(self.alloc, fd.field_type);
                             try self.appendError(
                                 try std.fmt.allocPrint(self.alloc, "field `{s}` on `{s}` wants {s}, got {s}", .{
                                     fd.name, struct_name, expected_str, actual_str,
@@ -1513,8 +1514,8 @@ const SemanticChecker = struct {
                         const actual = types_mod.inferExprType(self, call.callee.expr.field.object);
                         const expected = sig.params[i];
                         if (!numberAccepts(expected, actual)) {
-                            const expected_str = try expected.formatType(self.alloc);
-                            const actual_str = try actual.formatType(self.alloc);
+                            const expected_str = try type_serde.formatType(self.alloc, expected);
+                            const actual_str = try type_serde.formatType(self.alloc, actual);
                             try self.appendError(
                                 try std.fmt.allocPrint(self.alloc, "arg 1 to `{s}` wants {s}, got {s}", .{
                                     name, expected_str, actual_str,
@@ -1537,8 +1538,8 @@ const SemanticChecker = struct {
                                 const actual = types_mod.inferExprType(self, arg.expr.assign_expr.value);
                                 if (expected.tag == .type_var) continue;
                                 if (!numberAccepts(expected, actual)) {
-                                    const expected_str = try expected.formatType(self.alloc);
-                                    const actual_str = try actual.formatType(self.alloc);
+                                    const expected_str = try type_serde.formatType(self.alloc, expected);
+                                    const actual_str = try type_serde.formatType(self.alloc, actual);
                                     try self.appendError(
                                         try std.fmt.allocPrint(self.alloc, "arg `{s}` to `{s}` wants {s}, got {s}", .{
                                             pn, name, expected_str, actual_str,
@@ -1560,8 +1561,8 @@ const SemanticChecker = struct {
                         if (expected.tag == .type_var) continue;
                         if (!numberAccepts(expected, actual)) {
                             const param_name = if (pi < sig.param_names.len and sig.param_names[pi].len > 0) sig.param_names[pi] else "";
-                            const expected_str = try expected.formatType(self.alloc);
-                            const actual_str = try actual.formatType(self.alloc);
+                            const expected_str = try type_serde.formatType(self.alloc, expected);
+                            const actual_str = try type_serde.formatType(self.alloc, actual);
                             try self.appendError(
                                 try std.fmt.allocPrint(self.alloc, "arg {d} (`{s}`) to `{s}` wants {s}, got {s}", .{
                                     pi + 1, param_name, name, expected_str, actual_str,
@@ -1586,8 +1587,8 @@ const SemanticChecker = struct {
                 if (expected.tag == .type_var) continue;
                 if (!numberAccepts(expected, actual)) {
                     const param_name = if (i < sig.param_names.len and sig.param_names[i].len > 0) sig.param_names[i] else "";
-                    const expected_str = try expected.formatType(self.alloc);
-                    const actual_str = try actual.formatType(self.alloc);
+                    const expected_str = try type_serde.formatType(self.alloc, expected);
+                    const actual_str = try type_serde.formatType(self.alloc, actual);
                     const msg = if (call.implicit_self and i == 0)
                         try std.fmt.allocPrint(self.alloc, "arg 1 (`{s}`) to `{s}` wants {s}, got {s}", .{
                             param_name, name, expected_str, actual_str,
@@ -1698,8 +1699,8 @@ const SemanticChecker = struct {
         expected: types_mod.TypeInfo,
         actual: types_mod.TypeInfo,
     ) !void {
-        const expected_str = try expected.formatType(self.alloc);
-        const actual_str = try actual.formatType(self.alloc);
+        const expected_str = try type_serde.formatType(self.alloc, expected);
+        const actual_str = try type_serde.formatType(self.alloc, actual);
         const msg = try std.fmt.allocPrint(self.alloc, "`{s}` wants {s}, got {s}", .{
             name,
             expected_str,
@@ -1714,9 +1715,9 @@ const SemanticChecker = struct {
     }
 
     fn appendFieldMismatch(self: *SemanticChecker, field: anytype, expected: types_mod.TypeInfo, actual: types_mod.TypeInfo) !void {
-        const expected_str = try expected.formatType(self.alloc);
-        const actual_str = try actual.formatType(self.alloc);
-        const obj_name = try types_mod.inferExprType(self, field.object).formatType(self.alloc);
+        const expected_str = try type_serde.formatType(self.alloc, expected);
+        const actual_str = try type_serde.formatType(self.alloc, actual);
+        const obj_name = try type_serde.formatType(self.alloc, types_mod.inferExprType(self, field.object));
         const msg = try std.fmt.allocPrint(self.alloc, "field `{s}` on `{s}` wants {s}, got {s}", .{
             field.name,
             obj_name,
@@ -1732,8 +1733,8 @@ const SemanticChecker = struct {
     }
 
     fn appendReturnMismatch(self: *SemanticChecker, span: ast.Span, expected: types_mod.TypeInfo, actual: types_mod.TypeInfo) !void {
-        const expected_str = try expected.formatType(self.alloc);
-        const actual_str = try actual.formatType(self.alloc);
+        const expected_str = try type_serde.formatType(self.alloc, expected);
+        const actual_str = try type_serde.formatType(self.alloc, actual);
         const msg = try std.fmt.allocPrint(self.alloc, "return type mismatch: wanted {s}, got {s}", .{
             expected_str,
             actual_str,

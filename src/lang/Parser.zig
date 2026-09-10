@@ -9,7 +9,7 @@ const testing_helpers = @import("testing.zig");
 const lexer = lang.Lexer;
 const Token = lexer.Token;
 const TokenType = lexer.TokenType;
-const type_parser = @import("type_parser.zig");
+const type_serde = @import("type_serde.zig");
 
 const BP: struct {
     const i = comptime_int;
@@ -801,7 +801,7 @@ fn parseMatchArm(self: *Parser) anyerror!ast.MatchArm {
 
 /// type Name = TypeExpr
 fn parseTypeExpr(self: *Parser) anyerror!*ast.TypeExpr {
-    return try type_parser.parse(self.tokens, &self.pos, self.alloc);
+    return try type_serde.parse(self.tokens, &self.pos, self.alloc);
 }
 
 /// const x = expr or let x = expr, with const (a, b) = <expr> tuple destructuring

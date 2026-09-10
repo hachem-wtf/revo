@@ -7,7 +7,7 @@ const Register = revo.opcode.Register;
 const UpvalueSpec = revo.functions.UpvalueSpec;
 const types = @import("types.zig");
 
-const type_parser = @import("../type_parser.zig");
+const type_serde = @import("../type_serde.zig");
 const ast = @import("../ast.zig");
 const Node = ast.Node;
 
@@ -284,7 +284,7 @@ pub fn predeclareTypeAliases(self: *Compiler, exprs: []const *Node) !void {
                 // declares are values, not type aliases - do not pollute type space
                 if (decl.kind == .declare_decl) continue;
                 if (self.type_aliases.contains(t.name)) continue;
-                const type_info = try type_parser.evalTypeExpr(self, t.type_expr);
+                const type_info = try type_serde.evalTypeExpr(self, t.type_expr);
                 try self.type_aliases.put(t.name, type_info);
             },
             else => {},
@@ -445,7 +445,7 @@ pub fn allocFnSig(
     var param_types = try std.ArrayList(types.TypeInfo).initCapacity(self.alloc, params.len);
     errdefer param_types.deinit(self.alloc);
     for (params) |p| try param_types.append(self.alloc, if (p.type_name) |tn|
-        type_parser.evalTypeExpr(self, tn) catch types.TypeInfo{ .tag = .any }
+        type_serde.evalTypeExpr(self, tn) catch types.TypeInfo{ .tag = .any }
     else
         types.TypeInfo{ .tag = .any });
 
@@ -462,7 +462,7 @@ pub fn allocFnSig(
         .param_names = try param_names.toOwnedSlice(self.alloc),
         .params = try param_types.toOwnedSlice(self.alloc),
         .return_type = if (return_type) |rt|
-            type_parser.evalTypeExpr(self, rt) catch types.TypeInfo{ .tag = .any }
+            type_serde.evalTypeExpr(self, rt) catch types.TypeInfo{ .tag = .any }
         else
             types.TypeInfo{ .tag = .any },
         .required_count = required_count,

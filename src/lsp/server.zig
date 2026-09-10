@@ -282,14 +282,14 @@ const Handler = struct {
             try label.appendSlice(arena, p.name);
             if (p.optional) try label.append(arena, '?');
             if (p.type_name) |ti| {
-                const pt = try ti.formatType(arena);
+                const pt = try lang.type_serde.formatType(arena, ti);
                 try label.appendSlice(arena, ": ");
                 try label.appendSlice(arena, pt);
             }
         }
         try label.append(arena, ')');
         if (sig.return_type) |rt| {
-            const rt_str = try rt.formatType(arena);
+            const rt_str = try lang.type_serde.formatType(arena, rt);
             try label.appendSlice(arena, ": ");
             try label.appendSlice(arena, rt_str);
         }
@@ -305,7 +305,7 @@ const Handler = struct {
             pos += @as(u32, @intCast(p.name.len));
             if (p.optional) pos += 1;
             if (p.type_name) |ti| {
-                const pt = try ti.formatType(arena);
+                const pt = try lang.type_serde.formatType(arena, ti);
                 pos += 2 + @as(u32, @intCast(pt.len));
             }
             params_list.appendAssumeCapacity(.{
