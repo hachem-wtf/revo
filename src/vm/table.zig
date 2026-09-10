@@ -495,7 +495,7 @@ pub const Table = struct {
 
     const MAX_TAG_LOOP = 200;
 
-    pub fn get(self: *Table, key: Data, vm: *revo.VM) !?Data {
+    pub inline fn get(self: *Table, key: Data, vm: *revo.VM) !?Data {
         return self.getWithDepth(key, vm, MAX_TAG_LOOP);
     }
 

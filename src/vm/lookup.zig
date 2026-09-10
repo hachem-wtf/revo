@@ -23,13 +23,7 @@ pub fn resolveField(self: *VM, object: Data, key: Data, result_reg: ?@import("op
             if (t.getRaw(key, self)) |value| {
                 return .{ .value = value, .from_meta = false };
             }
-            if (t.metatable) |mt_id| {
-                if (try resolveViaMetatable(self, object, key, mt_id, result_reg)) |resolved| {
-                    return resolved;
-                }
-            }
-            const type_mt_id = self.metatables[@intFromEnum(mem.Type.table)] orelse return null;
-            return resolveViaMetatable(self, object, key, type_mt_id, result_reg);
+            return resolveTableMiss(self, object, t, key, result_reg);
         },
         .tuple => {
             const tuple_id = object.asTuple().?;
@@ -105,6 +99,18 @@ pub fn resolveField(self: *VM, object: Data, key: Data, result_reg: ?@import("op
             return resolveViaMetatable(self, object, key, mt_id, result_reg);
         },
     }
+}
+
+/// for when the caller already did the direct `getRaw` and missed
+///   and you need to skip straight to the metatables instead of hashing the same key twice
+pub fn resolveTableMiss(self: *VM, object: Data, t: *revo.table.Table, key: Data, result_reg: ?@import("opcode.zig").Register) VM.EvalError!?FieldLookup {
+    if (t.metatable) |mt_id| {
+        if (try resolveViaMetatable(self, object, key, mt_id, result_reg)) |resolved| {
+            return resolved;
+        }
+    }
+    const type_mt_id = self.metatables[@intFromEnum(mem.Type.table)] orelse return null;
+    return resolveViaMetatable(self, object, key, type_mt_id, result_reg);
 }
 
 fn resolveViaMetatable(self: *VM, object: Data, key: Data, mt_id: mem.TableID, result_reg: ?@import("opcode.zig").Register) VM.EvalError!?FieldLookup {

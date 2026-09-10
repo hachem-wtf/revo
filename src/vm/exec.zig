@@ -1,15 +1,3 @@
-const std = @import("std");
-const builtin = @import("builtin");
-const revo = @import("revo");
-const opcode = @import("opcode.zig");
-const Instruction = opcode.Instruction;
-const VM = @import("VM.zig");
-const compare_impl = @import("compare.zig");
-const Data = VM.memory.Data;
-const debug_assert_types = VM.debug_assert_types;
-const regRead = VM.regRead;
-const regWrite = VM.regWrite;
-
 pub fn runReport(self: *VM) !@TypeOf(self.*).EvalResult {
     self.clearPanicMessage();
     self.clearRuntimeMessage();
@@ -582,13 +570,10 @@ inline fn execFiberDispatch(
                 const t = try self.tableFast(t_id);
                 if (t.getRaw(key, self)) |value| {
                     regWrite(regs, base, instr.a, value);
-
-                    if (!fetchNext(fiber, &instr)) break :dispatch;
-                    continue :dispatch instr.op;
-                }
-            }
-
-            if (try self.resolveField(object, key, instr.a)) |resolved| {
+                } else if (try lookup.resolveTableMiss(self, object, t, key, instr.a)) |resolved| {
+                    regWrite(regs, base, instr.a, resolved.value);
+                } else regWrite(regs, base, instr.a, revo.Data.new.core(.undef));
+            } else if (try self.resolveField(object, key, instr.a)) |resolved| {
                 regWrite(regs, base, instr.a, resolved.value);
             } else regWrite(regs, base, instr.a, revo.Data.new.core(.undef));
 
@@ -605,6 +590,7 @@ inline fn execFiberDispatch(
             const table_value = regRead(regs, base, instr.a);
             const t_id = table_value.asTable() orelse
                 return self.typeError("table", table_value);
+
             const t = try self.tableFast(t_id);
             const key = Data.new.atom(instr.bx);
             try t.put(t_id, self, key, regRead(regs, base, instr.c));
@@ -618,9 +604,13 @@ inline fn execFiberDispatch(
 
             if (object.asTable()) |t_id| {
                 const t = try self.tableFast(t_id);
-
-                const res = (t.get(key, self) catch revo.Data.new.core(.undef)) orelse revo.Data.new.core(.undef);
-                regWrite(regs, base, instr.a, res);
+                if (t.getRaw(key, self)) |value| {
+                    regWrite(regs, base, instr.a, value);
+                } else if (try lookup.resolveTableMiss(self, object, t, key, instr.a)) |resolved| {
+                    regWrite(regs, base, instr.a, resolved.value);
+                } else {
+                    regWrite(regs, base, instr.a, revo.Data.new.core(.undef));
+                }
             } else if (try self.resolveField(object, key, instr.a)) |resolved| {
                 regWrite(regs, base, instr.a, resolved.value);
             } else {
@@ -643,13 +633,17 @@ inline fn execFiberDispatch(
             const tuple_val = regRead(regs, base, instr.b);
             const tuple_id = tuple_val.asTuple() orelse
                 return self.typeError("tuple", tuple_val);
+
             const idx_val = regRead(regs, base, instr.c);
             const idx_num = idx_val.asNum() orelse
                 return self.typeError("number for tuple index", idx_val);
+
             if (idx_num < 0 or @floor(idx_num) != idx_num)
                 return self.fail(error.TypeError, "tuple index must be a non-negative integer", .{});
+
             if (idx_num > @as(f64, @floatFromInt(std.math.maxInt(usize))))
                 return self.fail(error.TypeError, "tuple index too large", .{});
+
             const idx: usize = @intFromFloat(idx_num);
             const t = try self.tuples.get(tuple_id);
             if (idx >= t.items.len)
@@ -1506,3 +1500,18 @@ noinline fn execStringRepeat(
         .{ revo.std_lib.typeof(lhs, self), revo.std_lib.typeof(rhs, self) },
     );
 }
+
+const std = @import("std");
+const builtin = @import("builtin");
+
+const revo = @import("revo");
+
+const compare_impl = @import("compare.zig");
+const opcode = @import("opcode.zig");
+const Instruction = opcode.Instruction;
+const VM = @import("VM.zig");
+const Data = VM.memory.Data;
+const debug_assert_types = VM.debug_assert_types;
+const regRead = VM.regRead;
+const regWrite = VM.regWrite;
+const lookup = VM.lookup;
