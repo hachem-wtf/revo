@@ -21,20 +21,9 @@ const UnionVariant = types.UnionVariant;
 const Token = Lexer.Token;
 const TokenType = Lexer.TokenType;
 
-/// parse a type string from stdlib annotations and compiler fn signatures
-/// handles T... (variadic marker, stripped) and delegates to parse() + evalTypeExpr()
-/// ex: "number?" -> int | :nil,  "string..." -> string,  "int | :nil" -> int | :nil
-///     ctx must support .alloc and .resolveTypeAlias(name) -> ?TypeInfo
-pub fn parseTypeString(ctx: anytype, s: []const u8) !TypeInfo {
-    const trimmed = if (std.mem.endsWith(u8, s, "...")) s[0 .. s.len - 3] else s;
-    if (trimmed.len == 0) return .{ .tag = .any };
-    const tokens = try Lexer.lexAt(ctx.alloc, trimmed, .{});
-    var pos: usize = 0;
-    const te = try parse(tokens, &pos, ctx.alloc);
-    return try evalTypeExpr(ctx, te);
-}
-
-/// shared shim for parseTypeString callers that work against raw spec strings
+/// empty scope for tooling
+/// no aliases, no generics, no imports, etc
+/// unknown names degrade
 pub const BareCtx = struct {
     alloc: std.mem.Allocator,
     pub fn isTypeParam(_: @This(), _: []const u8) bool {
@@ -54,25 +43,6 @@ pub const BareCtx = struct {
 pub fn parse(tokens: []const Token, pos: *usize, alloc: std.mem.Allocator) !*ast.TypeExpr {
     var p = Parser{ .tokens = tokens, .pos = pos, .alloc = alloc };
     return try p.parseExpr();
-}
-
-/// type params declared in a generic sig head, e.g. `tuple:unwrap[T](self: (:err, T)) -> T`
-/// -> @["T"]. names borrow the sig string; empty when the head has no `[...]`
-pub fn sigTypeParams(alloc: std.mem.Allocator, sig: []const u8) ![]const []const u8 {
-    const head_end = std.mem.indexOfScalar(u8, sig, '(') orelse sig.len;
-    const head = sig[0..head_end];
-    const open = std.mem.indexOfScalar(u8, head, '[') orelse return &.{};
-    const close = std.mem.indexOfScalar(u8, head[open + 1 ..], ']') orelse return &.{};
-    const body = head[open + 1 .. open + 1 + close];
-    var out = try std.ArrayList([]const u8).initCapacity(alloc, 2);
-    errdefer out.deinit(alloc);
-    var it = std.mem.splitScalar(u8, body, ',');
-    while (it.next()) |p| {
-        const t = std.mem.trim(u8, p, " ");
-        if (t.len == 0) continue;
-        try out.append(alloc, t);
-    }
-    return out.toOwnedSlice(alloc);
 }
 
 const Parser = struct {
@@ -642,6 +612,106 @@ pub fn formatTypeOpts(alloc: std.mem.Allocator, ti: TypeInfo, opts: PrintOptions
     return try buf.toOwnedSlice();
 }
 
+/// deep-copy a TypeExpr
+/// dupe every borrowed string (names borrow source text)
+///     paired with freeTypeExpr
+/// default_value pointers copy over but stay unowned (type position never sets them)
+pub fn cloneTypeExpr(alloc: std.mem.Allocator, te: *const ast.TypeExpr) std.mem.Allocator.Error!*ast.TypeExpr {
+    const kind: ast.TypeExpr.Kind = switch (te.kind) {
+        .named => |n| .{ .named = try alloc.dupe(u8, n) },
+        .atom => |n| .{ .atom = try alloc.dupe(u8, n) },
+        .tuple => |items| blk: {
+            const owned = try alloc.alloc(*ast.TypeExpr, items.len);
+            for (items, owned) |item, *dst| dst.* = try cloneTypeExpr(alloc, item);
+            break :blk .{ .tuple = owned };
+        },
+        .union_of => |variants| blk: {
+            const owned = try alloc.alloc(*ast.TypeExpr, variants.len);
+            for (variants, owned) |v, *dst| dst.* = try cloneTypeExpr(alloc, v);
+            break :blk .{ .union_of = owned };
+        },
+        .record => |fields| blk: {
+            const owned = try alloc.alloc(ast.RecordField, fields.len);
+            for (fields, owned) |f, *dst| dst.* = .{
+                .name = try alloc.dupe(u8, f.name),
+                .type_expr = try cloneTypeExpr(alloc, f.type_expr),
+            };
+            break :blk .{ .record = owned };
+        },
+        .qualified => |q| .{ .qualified = .{
+            .module = try alloc.dupe(u8, q.module),
+            .name = try alloc.dupe(u8, q.name),
+        } },
+        .function => |f| blk: {
+            const params = try alloc.alloc(ast.FnParam, f.params.len);
+            for (f.params, params) |p, *dst| dst.* = .{
+                .name = try alloc.dupe(u8, p.name),
+                .name_span = p.name_span,
+                .type_name = if (p.type_name) |tn| try cloneTypeExpr(alloc, tn) else null,
+                .optional = p.optional,
+                .default_value = p.default_value,
+                .variadic = p.variadic,
+            };
+            break :blk .{ .function = .{
+                .params = params,
+                .return_type = if (f.return_type) |rt| try cloneTypeExpr(alloc, rt) else null,
+            } };
+        },
+        .parameterized => |p| blk: {
+            const owned = try alloc.alloc(*ast.TypeExpr, p.params.len);
+            for (p.params, owned) |item, *dst| dst.* = try cloneTypeExpr(alloc, item);
+            break :blk .{ .parameterized = .{
+                .name = try alloc.dupe(u8, p.name),
+                .params = owned,
+            } };
+        },
+        .error_union => |inner| .{ .error_union = try cloneTypeExpr(alloc, inner) },
+    };
+    return try ast.allocTypeExpr(alloc, te.span, kind);
+}
+
+/// free a cloneTypeExpr tree: strings, slices, nodes
+pub fn freeTypeExpr(alloc: std.mem.Allocator, te: *ast.TypeExpr) void {
+    switch (te.kind) {
+        .named => |n| alloc.free(n),
+        .atom => |n| alloc.free(n),
+        .tuple => |items| {
+            for (items) |item| freeTypeExpr(alloc, item);
+            alloc.free(items);
+        },
+        .union_of => |variants| {
+            for (variants) |v| freeTypeExpr(alloc, v);
+            alloc.free(variants);
+        },
+        .record => |fields| {
+            for (fields) |f| {
+                alloc.free(f.name);
+                freeTypeExpr(alloc, f.type_expr);
+            }
+            alloc.free(fields);
+        },
+        .qualified => |q| {
+            alloc.free(q.module);
+            alloc.free(q.name);
+        },
+        .function => |f| {
+            for (f.params) |p| {
+                alloc.free(p.name);
+                if (p.type_name) |tn| freeTypeExpr(alloc, tn);
+            }
+            alloc.free(f.params);
+            if (f.return_type) |rt| freeTypeExpr(alloc, rt);
+        },
+        .parameterized => |p| {
+            alloc.free(p.name);
+            for (p.params) |param| freeTypeExpr(alloc, param);
+            alloc.free(p.params);
+        },
+        .error_union => |inner| freeTypeExpr(alloc, inner),
+    }
+    alloc.destroy(te);
+}
+
 test "type serde roundtrips" {
     const cases = [_][]const u8{
         "{number, number, name: string}",
@@ -652,8 +722,6 @@ test "type serde roundtrips" {
         "(:ok, table) | (:err, any)",
         "fn() -> string",
         "fn(a: number) -> string",
-        // optional param a; must match the one in non-type revo code
-        // TODO: make it universal with all-all serde
         "fn(?a: number) -> string",
         "table<string, number>",
         "(:ok, any) | (:err, any)",
@@ -666,7 +734,10 @@ test "type serde roundtrips" {
         defer arena.deinit();
         const alloc = arena.allocator();
 
-        const ti = try parseTypeString(BareCtx{ .alloc = alloc }, c);
+        const tokens = try Lexer.lexAt(alloc, c, .{});
+        var pos: usize = 0;
+        const te = try parse(tokens, &pos, alloc);
+        const ti = try evalTypeExpr(BareCtx{ .alloc = alloc }, te);
         try std.testing.expectEqualStrings(c, try formatType(alloc, ti));
     }
 }

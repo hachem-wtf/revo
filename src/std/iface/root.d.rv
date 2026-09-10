@@ -44,7 +44,7 @@ pub declare debug = fn() -> table
 pub declare unwrap = fn(result: tuple) -> any
 
 #* creates a new channel with optional buffer size *#
-pub declare chan = fn(capacity: num?...) -> tuple
+pub declare chan = fn(?capacity: num...) -> tuple
 
 #* sends value to channel *#
 pub declare send = fn(chan: tuple, value: any) -> :ok

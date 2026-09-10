@@ -1,7 +1,7 @@
 #! process and host access: cwd, exit, subprocesses, stdin lines, importing modules, running tests !#
 
-#* reads one line from stdin, or until a custom delimiter (opts: { delimiter: string|:nil|:eof }) *#
-pub declare input = fn(opts: table?...) -> !string
+#* reads one line from stdin, or until a custom delimiter (?opts: { delimiter: string|:nil|:eof }) *#
+pub declare input = fn(?opts: table...) -> !string
 
 #* returns current working directory path *#
 pub declare cwd = fn() -> string
