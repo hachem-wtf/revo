@@ -315,7 +315,6 @@ pub const Session = struct {
             const kind: []const u8 = switch (s.kind) {
                 .binding => "let",
                 .function => "fn",
-                .struct_type => "type",
                 .type_alias => "alias",
                 .param => "param",
                 .macro => "macro",

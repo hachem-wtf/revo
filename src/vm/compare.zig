@@ -204,8 +204,6 @@ pub inline fn evalCachedFast(
                         }
                         break :blk true;
                     },
-                    .struct_val => lhs.asStructVal().? == rhs.asStructVal().?,
-                    .struct_type => lhs.asStructType().? == rhs.asStructType().?,
                     .foreign => lhs.asForeign().? == rhs.asForeign().?,
                     else => unreachable,
                 };

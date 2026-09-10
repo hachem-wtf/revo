@@ -53,8 +53,6 @@ fn writeJsonValue(data: Data, vm: *VM, writer: *std.Io.Writer) anyerror!void {
         .table => try writeTableJson(data.asTable().?, vm, writer),
         .tuple => try writeTupleJson(data.asTuple().?, vm, writer),
         .function => return error.UnsupportedJsonValue,
-        .struct_val => return error.UnsupportedJsonValue,
-        .struct_type => return error.UnsupportedJsonValue,
         .foreign => return error.UnsupportedJsonValue,
     };
 }

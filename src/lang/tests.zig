@@ -79,36 +79,6 @@ test "parser reports multiple syntax errors in one pass" {
     }
 }
 
-test "typed struct field access emits fast opcodes" {
-    var vm = try VM.init(t.runtime());
-    defer vm.deinit();
-
-    const built = try lang.build(&vm, .{
-        .text =
-        \\ struct User {
-        \\     age: number = 0,
-        \\ }
-        \\ let user: User = User {}
-        \\ const before = user.age
-        \\ user.age = 12
-        \\ before + user.age
-        ,
-    }, .{});
-    try std.testing.expect(built == .ok);
-    defer vm.runtime.alloc.free(built.ok.instructions);
-    defer vm.runtime.alloc.free(built.ok.spans);
-
-    var saw_get = false;
-    var saw_set = false;
-    for (built.ok.instructions) |inst| {
-        if (inst.op == .struct_get_offset) saw_get = true;
-        if (inst.op == .struct_set_offset) saw_set = true;
-    }
-
-    try std.testing.expect(saw_get);
-    try std.testing.expect(saw_set);
-}
-
 test "builtin table methods prebind through stdlib tables" {
     var vm = try VM.init(t.runtime());
     defer vm.deinit();
@@ -783,19 +753,6 @@ test "method calls require obj:method(args)" {
         \\ const Email = {parse = fn(x) x}
         \\ Email.parse(42)
     , 42);
-}
-
-test "method call after train keeps receiver alive" {
-    try t.topNumber(
-        \\ struct Box {
-        \\     state = {},
-        \\     fn train(self) self,
-        \\     fn take(self, n: int) n,
-        \\ }
-        \\ const c = Box{}
-        \\ c:train()
-        \\ c:take(50)
-    , 50);
 }
 
 test "metatable-backed constructor and instance methods compile" {
@@ -1613,15 +1570,6 @@ test "runtime report includes wrong arity detail" {
     , .ParseError);
 }
 
-test "compile time span for struct constructor type error points at constructor call" {
-    try t.expectCompileError(
-        \\ struct User {
-        \\     age: number
-        \\ }
-        \\ User { age = "old" }
-    , .ParseError);
-}
-
 test "runtime report includes tuple index detail" {
     try t.expectRuntimeFailure(
         \\ const f = fn() (1,)
@@ -1821,241 +1769,6 @@ test "top-level locals are real closure locals" {
         \\ const x = 1
         \\ x = 2
     , .CompileError);
-}
-
-test "structs with comma-separated items and fn syntax" {
-    try t.topNumber(
-        \\ struct User {
-        \\     name: string,
-        \\     fn get_name(self) self.name,
-        \\ }
-        \\ const user = User { name = "alice" }
-        \\ len(user:get_name())
-    , 5);
-}
-
-test "structs build struct instances" {
-    try t.topNumber(
-        \\ struct User {
-        \\     name: string,
-        \\     age: number = 0,
-        \\     const age_next = fn(self) self.age + 1,
-        \\ }
-        \\ const user = User { name = "ana" }
-        \\ user:age_next()
-    , 1);
-    try t.topString(
-        \\ struct User {
-        \\     name: string,
-        \\     age: number = 0,
-        \\ }
-        \\ const user = User { name = "ana", age = 12 }
-        \\ user.name
-    , "ana");
-    try t.topType(
-        \\ struct User {
-        \\     name: string,
-        \\ }
-        \\ const user = User { name = "ana" }
-        \\ typeof(user)
-    , .struct_type);
-    try t.topString(
-        \\ struct User {
-        \\     name: string,
-        \\ }
-        \\ const user = User { name = "ana" }
-        \\ typeof(user) { name = "bob" }.name
-    , "bob");
-}
-
-test "struct methods crash if declared outside struct body" {
-    try t.expectCompileError(
-        \\ struct Counter {
-        \\     n: number,
-        \\ }
-        \\ fn Counter:inc(self) do
-        \\     self.n + 1
-        \\ end
-    , .ParseError);
-    try t.topNumber(
-        \\ struct Counter {
-        \\     n: number,
-        \\     fn inc(self) self.n + 1,
-        \\ }
-        \\ let c = Counter { n = 0 }
-        \\ c:inc()
-    , 1);
-}
-
-test "struct fields are mutable" {
-    try t.topNumber(
-        \\ struct User {
-        \\     age: number = 0,
-        \\ }
-        \\ let user = User {}
-        \\ user.age = 12
-        \\ user.age
-    , 12);
-    try t.expectRuntimeFailureWithMessage(
-        \\ struct User {
-        \\     age: number = 0,
-        \\ }
-        \\ let user = User {}
-        \\ user.name = "bea"
-    , .Panic, "unknown field `name` for struct `User`");
-    try t.topNumber(
-        \\ struct User {
-        \\     name: string,
-        \\     age: number = 0,
-        \\     const with_age_next = fn(self) User { name = self.name, age = self.age + 1 },
-        \\ }
-        \\ let user = User { name = "ana" }
-        \\ user = user:with_age_next():with_age_next():with_age_next()
-        \\ user = user:with_age_next()
-        \\ user = user:with_age_next()
-        \\ user.age
-    , 5);
-    try t.topNumber(
-        \\ struct User {
-        \\     name: string,
-        \\     age: number = 0,
-        \\
-        \\     const with_age_next = fn(self)
-        \\         User{name = self.name, age = self.age + 1},
-        \\ }
-        \\
-        \\ let u = User{
-        \\     name = "zxcv",
-        \\ }
-        \\
-        \\ u = u:with_age_next()
-        \\ u = u:with_age_next()
-        \\ u = u:with_age_next()
-        \\ u.age
-    , 3);
-}
-
-test "defaulted struct fields fill in missing values" {
-    try t.topNumber(
-        \\ struct Chain {
-        \\     state = {6, 7},
-        \\     count: number = 8,
-        \\ }
-        \\ const c = Chain{}
-        \\ c.count + c.state[1]
-    , 15);
-}
-
-test "struct field types are checked at compile time" {
-    try t.topNumber(
-        \\ struct Inner { v: number }
-        \\ struct User {
-        \\     name: string,
-        \\     tag: atom,
-        \\     fn_ty: function,
-        \\     tbl: table,
-        \\     tup: tuple,
-        \\     inner: Inner,
-        \\ }
-        \\ const u = User { name = "a", tag = :ok, fn_ty = fn() 1, tbl = {}, tup = (1, 2), inner = Inner { v = 3 } }
-        \\ u.inner.v
-    , 3);
-    try t.expectCompileError(
-        \\ struct User { name: string }
-        \\ User { name = :ok }
-    , .ParseError);
-    try t.expectCompileError(
-        \\ struct User { fn_ty: function }
-        \\ User { fn_ty = 1 }
-    , .ParseError);
-    try t.expectCompileError(
-        \\ struct User { tbl: table }
-        \\ User { tbl = (1, 2) }
-    , .ParseError);
-    try t.expectCompileError(
-        \\ struct Inner { v: number }
-        \\ struct User { inner: Inner }
-        \\ User { inner = 42 }
-    , .ParseError);
-}
-
-test "structs reject bad inputs" {
-    try t.expectCompileError(
-        \\ struct User {
-        \\     name: string,
-        \\     age: number = 0,
-        \\ }
-        \\ User()
-    , .ParseError);
-    try t.expectCompileError(
-        \\ struct User {
-        \\     name: string,
-        \\     age: number = 0,
-        \\ }
-        \\ User { age = 12 }
-    , .ParseError);
-    try t.expectCompileError(
-        \\ struct User {
-        \\     name: string
-        \\ }
-        \\ User { name = "ana", age = 12 }
-    , .ParseError);
-    try t.expectRuntimeFailureWithMessage(
-        \\ struct User {
-        \\     name: string,
-        \\     age: number = 0,
-        \\ }
-        \\ let t = { age = 12 }
-        \\ User(t)
-    , .Panic, "missing field `name` for struct `User`");
-    try t.expectRuntimeFailureWithMessage(
-        \\ struct User {
-        \\     name: string
-        \\ }
-        \\ let t = { name = "ana", age = 12 }
-        \\ User(t)
-    , .Panic, "unknown field `age` for struct `User`");
-    try t.expectCompileError(
-        \\ struct User {
-        \\     age: number
-        \\ }
-        \\ User { age = "old" }
-    , .ParseError);
-}
-
-test "structs do not leak" {
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-
-    try tmp.dir.writeFile(io, .{
-        .sub_path = "asdf.rv",
-        .data =
-        \\ struct User { name: string = "hi" }
-        ,
-    });
-
-    const module_dir = try tmp.dir.realPathFileAlloc(io, ".", alloc);
-    defer alloc.free(module_dir);
-
-    // *the struct from asdf.rv must not resolve in a fresh module - it fails
-    // at compile time now instead of as a runtime undefined variable*
-    try t.expectCompileErrorInDir(module_dir,
-        \\ User { name = "asdf" }
-    );
-}
-
-test "struct descriptors stay off globals" {
-    var vm = try VM.init(t.runtime());
-    defer vm.deinit();
-
-    const built = try lang.build(&vm, .{ .text =
-        \\ struct User { name: string = "hi" }
-    }, .{});
-    try std.testing.expect(built == .ok);
-    defer vm.runtime.alloc.free(built.ok.instructions);
-    defer vm.runtime.alloc.free(built.ok.spans);
-
-    try std.testing.expect(!vm.globals.contains(try vm.internAtom("__struct_desc_0")));
 }
 
 test "top module assignment does not create vm global" {
@@ -2510,16 +2223,6 @@ test "tuple let binding initializes locals" {
     , 3);
 }
 
-test "num alias works in fn and method signatures" {
-    try t.topNumber(
-        \\ struct Chain {
-        \\     fn take(self, count: num) count,
-        \\ }
-        \\ const c = Chain{}
-        \\ c:take(50)
-    , 50);
-}
-
 test "num alias works in range bounds" {
     try t.topNumber(
         \\ fn f(count: num) do
@@ -2531,36 +2234,6 @@ test "num alias works in range bounds" {
         \\ end
         \\ f(50)
     , 50);
-}
-
-test "markov take body" {
-    try t.topString(
-        \\ fn random(n) math.floor((time.now_ns() / 1000) % n)
-        \\ fn pref(a, b) fmt("%v %v", a, b)
-        \\ const NOWORD = string.of_ascii(10)
-        \\ struct Chain {
-        \\   state: table<string, table> = {},
-        \\   fn take(self, count: num) -> string do
-        \\     let out = ""
-        \\     let w1 = NOWORD
-        \\     let w2 = NOWORD
-        \\     for i in 0..count do
-        \\       let list = self.state[pref(w1, w2)]
-        \\       if not list break()
-        \\       let n = len(list)
-        \\       if n < 1 break()
-        \\       let nextword = list[random(n)]
-        \\       if nextword == NOWORD break()
-        \\       out = fmt("%v%v ", out, nextword)
-        \\       w1 = w2
-        \\       w2 = nextword
-        \\     end
-        \\     out
-        \\   end
-        \\ }
-        \\ const c = Chain{state = {[pref(NOWORD, NOWORD)] = {"hello"}}}
-        \\ c:take(1)
-    , "hello ");
 }
 
 test "typed binding label names the expected type" {
@@ -3465,27 +3138,6 @@ test "cross-module proc macro injection works" {
     , 42);
 }
 
-test "cross-module pub struct is accessible" {
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    try tmp.dir.writeFile(io, .{
-        .sub_path = "structs.rv",
-        .data =
-        \\ pub struct Box {
-        \\     val: number = 0,
-        \\ }
-        \\ pub fn new_box(v) Box { val = v }
-        ,
-    });
-    const module_dir = try tmp.dir.realPathFileAlloc(io, ".", alloc);
-    defer alloc.free(module_dir);
-    try t.topNumberInDir(module_dir,
-        \\ import "./structs"
-        \\ const b = structs.new_box(42)
-        \\ b.val
-    , 42);
-}
-
 test "const x = import \"foo\" with different names binds both" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -3599,26 +3251,6 @@ test "pub type alias referencing another type alias from same module" {
         \\ import "./chain"
         \\ chain.take(42)
     , 42);
-}
-
-test "pub type alias referencing a pub struct from same module" {
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    try tmp.dir.writeFile(io, .{
-        .sub_path = "struct_types.rv",
-        .data =
-        \\ pub struct Point { x: num, y: num }
-        \\ pub type P = Point
-        \\ pub fn make(x: num, y: num) -> P Point({x = x, y = y})
-        ,
-    });
-    const module_dir = try tmp.dir.realPathFileAlloc(io, ".", alloc);
-    defer alloc.free(module_dir);
-    try t.topNumberInDir(module_dir,
-        \\ import "./struct_types"
-        \\ const p = struct_types.make(1, 2)
-        \\ p.x + p.y
-    , 3);
 }
 
 test "pub type alias works in type annotation after import" {
@@ -3862,24 +3494,6 @@ test "let import binding is rejected" {
     );
 }
 
-test "module with all pub decl types" {
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    try tmp.dir.writeFile(io, .{ .sub_path = "alltypes.rv", .data =
-        \\pub const val = 42
-        \\pub fn add(a, b) a + b
-        \\pub struct Pt { x: int, y: int }
-        \\
-    });
-    const module_dir = try tmp.dir.realPathFileAlloc(io, ".", alloc);
-    defer alloc.free(module_dir);
-    // val, add, and Pt should all appear in the export table
-    try t.topNumberInDir(module_dir,
-        \\ import "./alltypes"
-        \\ alltypes.val + alltypes.add(3, 4)
-    , 49);
-}
-
 test "duplicate import name is rejected at compile time" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -4045,25 +3659,3 @@ test "import typed function with no type annotations falls through" {
     , 42);
 }
 
-test "struct default table is fresh per instance" {
-    // struct field defaults were const values shared by every
-    // instance, so mutating one instance's table leaked into other instances
-    try t.topNumber(
-        \\ struct C { toks: table = {} }
-        \\ const a = C{}
-        \\ a.toks:push(1)
-        \\ a.toks:push(2)
-        \\ const b = C{}
-        \\ b.toks:push(3)
-        \\ a.toks:len()
-    , 2);
-
-    try t.topNumber(
-        \\ struct C { toks: table = {} }
-        \\ const a = C{}
-        \\ a.toks:push(1)
-        \\ const b = C{}
-        \\ b.toks:push(2)
-        \\ b.toks:len() * 100 + a.toks:len()
-    , 101);
-}

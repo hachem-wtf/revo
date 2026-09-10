@@ -123,7 +123,6 @@ pub const Compiler = struct {
     },
     active_registers: usize = 0,
     max_registers: usize = 0,
-    struct_layouts: std.StringHashMap([]const types.FieldDef),
     ir_builder: ir.IrBuilder,
     value_stack: std.ArrayList(*ir.IrInst),
     // register cache for upvalue loads, cleared per-block in compileBlock
@@ -155,7 +154,6 @@ pub const Compiler = struct {
             .spans = try std.ArrayList(ast.Span).initCapacity(arena, 32),
             .loop_stack = try std.ArrayList(state_mod.LoopFrame).initCapacity(arena, 8),
             .test_suite_names = try std.ArrayList([]const u8).initCapacity(arena, 4),
-            .struct_layouts = std.StringHashMap([]const types.FieldDef).init(arena),
             .ir_builder = try ir.IrBuilder.init(arena),
             .value_stack = try std.ArrayList(*ir.IrInst).initCapacity(arena, 32),
             .upvalue_cache = std.AutoHashMap(usize, usize).init(arena),
@@ -177,9 +175,6 @@ pub const Compiler = struct {
         }
         self.loop_stack.deinit(self.alloc);
         self.test_suite_names.deinit(self.alloc);
-        var layout_it = self.struct_layouts.iterator();
-        while (layout_it.next()) |entry| self.alloc.free(entry.value_ptr.*);
-        self.struct_layouts.deinit();
         self.pending_prototypes.deinit(self.alloc);
         self.ir_builder.deinit();
         self.value_stack.deinit(self.alloc);
@@ -466,19 +461,13 @@ pub const Compiler = struct {
                 d -= 3;
                 try self.recordStackOp(op, 4, 1, result_reg, 0);
             },
-            .table_set_atom, .struct_set_offset => {
+            .table_set_atom => {
                 std.debug.assert(d >= 2);
                 result_reg = try toRegister(d - 2);
                 d -= 1;
                 try self.recordStackOp(op, 2, 0, result_reg, op_arg);
             },
-            .struct_set_method => {
-                std.debug.assert(d >= 3);
-                result_reg = try toRegister(d - 3);
-                d -= 2;
-                try self.recordStackOp(op, 3, 0, result_reg, 0);
-            },
-            .table_get_atom, .tuple_get_const, .struct_get_offset, .struct_init => {
+            .table_get_atom, .tuple_get_const => {
                 std.debug.assert(d > 0);
                 result_reg = try toRegister(d - 1);
                 try self.recordStackOp(op, 1, 1, result_reg, op_arg);
@@ -542,7 +531,7 @@ pub const Compiler = struct {
     }
 
     pub fn compileRoot(self: *Compiler, expr: *const Node) InternalLowerError!void {
-        try self.compileFn(&.{}, null, expr, "__main", null, &.{}, null);
+        try self.compileFn(&.{}, null, expr, "__main", null, &.{});
         if (self.failure_reports.items.len != 0) return error.LoweringFailed;
         try self.emit(.call, 0);
         try self.emit(.halt, 0);
@@ -732,14 +721,8 @@ pub const Compiler = struct {
             .or_expr => |v| try flow.compileOr(self, v.left, v.right),
             .call => |call| try self.compileCall(call),
             .field => |field| {
-                // typed struct field?
-                if (self.resolveTypedStructFieldOffset(field.object, field.name)) |off| {
-                    try self.compile(field.object, true);
-                    try self.emit(.struct_get_offset, @intCast(off));
-                } else {
-                    try self.compile(field.object, true);
-                    try self.emit(.table_get_atom, try self.vm.internAtom(field.name));
-                }
+                try self.compile(field.object, true);
+                try self.emit(.table_get_atom, try self.vm.internAtom(field.name));
             },
             .index => |index| {
                 try self.compile(index.object, true);
@@ -817,7 +800,6 @@ pub const Compiler = struct {
                 try self.emit(.tuple_new, @intCast(items.len));
             },
             .table => |entries| try values.compileTable(self, entries),
-            .struct_def => |def| try values.compileStruct(self, expr, def.name, def.items),
             .return_expr => |val| {
                 if (val) |v| {
                     try self.compile(v, true);
@@ -865,7 +847,7 @@ pub const Compiler = struct {
             .break_expr => |b| try flow.compileBreak(self, expr, b.value, b.label),
             .continue_expr => |c| try flow.compileContinue(self, expr, c.value, c.label),
             .labeled_block => |lb| try flow.compileLabeledBlock(self, lb.label, lb.body),
-            .fn_expr => |fn_expr| try self.compileFn(fn_expr.params, fn_expr.return_type, fn_expr.body, "<fn>", null, fn_expr.type_params, null),
+            .fn_expr => |fn_expr| try self.compileFn(fn_expr.params, fn_expr.return_type, fn_expr.body, "<fn>", null, fn_expr.type_params),
             .match_expr => |v| try flow.compileMatch(self, v.subject, v.arms),
             .tuple_pattern => return self.fail(
                 .UnsupportedSyntax,
@@ -997,7 +979,6 @@ pub const Compiler = struct {
                 try self.emit(.call_field, @intCast(argc));
             },
             .ident => |fn_name| {
-                if (try self.tryCompileStructInit(call)) return;
                 const reordered_args = try validateCallArgs(
                     self,
                     fn_name,
@@ -1059,36 +1040,6 @@ pub const Compiler = struct {
         }
     }
 
-    fn tryCompileStructInit(
-        self: *Compiler,
-        call: anytype,
-    ) InternalLowerError!bool {
-        if (call.implicit_self or call.type_args.len > 0) return false;
-        const callee_type = type_check.inferExprType(self, call.callee);
-        if (callee_type.tag != .struct_type) return false;
-        const type_id = self.vm.struct_types.findTypeByName(
-            callee_type.tag.struct_type,
-        ) orelse return false;
-
-        if (call.args.len > 1) {
-            const msg = try std.fmt.allocPrint(
-                self.alloc,
-                "struct `{s}` expects at most 1 init table, got {d}",
-                .{ callee_type.tag.struct_type, call.args.len },
-            );
-            return self.fail(.CompileError, call.callee, msg);
-        }
-        if (call.args.len == 1) {
-            try self.compile(call.args[0], true);
-        } else {
-            try self.@"const"(
-                Data.new.core(.undef),
-            );
-        }
-        try self.emit(.struct_init, @intCast(type_id));
-        return true;
-    }
-
     fn tryCompileBoundMethodCall(
         self: *Compiler,
         field: anytype,
@@ -1100,7 +1051,6 @@ pub const Compiler = struct {
             .string => "string",
             .tuple => "tuple",
             .table => "table",
-            .struct_type => return false,
             else => return false,
         };
 
@@ -1424,23 +1374,6 @@ pub const Compiler = struct {
         return full;
     }
 
-    pub fn resolveTypedStructFieldOffset(
-        self: *Compiler,
-        object: *const Node,
-        field_name: []const u8,
-    ) ?usize {
-        if (object.expr != .ident) return null;
-        return switch (type_check.inferExprType(self, object).tag) {
-            .struct_type => |type_name| blk: {
-                const type_id = self.vm.struct_types.findTypeByName(type_name) orelse break :blk null;
-                const desc = self.vm.struct_types.getType(type_id) orelse break :blk null;
-                const field_atom = self.vm.internAtom(field_name) catch break :blk null;
-                break :blk desc.field_index.get(field_atom);
-            },
-            else => null,
-        };
-    }
-
     pub fn compileComp(self: *Compiler, expr: *Node) InternalLowerError!void {
         var temp_compiler = try Compiler.init(
             self.vm,
@@ -1548,7 +1481,6 @@ pub const Compiler = struct {
                     name,
                     null,
                     binding.value.expr.fn_expr.type_params,
-                    null,
                 );
             } else try self.compile(binding.value, true);
 
@@ -1603,7 +1535,6 @@ pub const Compiler = struct {
         name: []const u8,
         loop_sym: ?revo.AtomID,
         type_params: []const []const u8,
-        self_type: ?types.TypeInfo,
     ) InternalLowerError!void {
         try self.validateName(name, body.span);
 
@@ -1666,14 +1597,6 @@ pub const Compiler = struct {
                 try fn_state.type_hints.append(self.alloc, .{
                     .name = param.name,
                     .type_info = try type_serde.evalTypeExpr(self, type_name),
-                });
-            } else if (self_type != null and std.mem.eql(u8, param.name, "self")) {
-                // methods know their receiver's struct type even when `self`
-                // is written untyped, so `self.x` lowers to struct_get_offset
-                // instead of a hashed table lookup
-                try fn_state.type_hints.append(self.alloc, .{
-                    .name = param.name,
-                    .type_info = self_type.?,
                 });
             }
         }

@@ -79,7 +79,7 @@ pub fn readRegs(inst: *const ir.IrInst, out: []Register) usize {
 
         // the object register comes from the operand, not the result register:
         // a peephole may point the read at an earlier live load of the object
-        .table_get_atom, .struct_get_offset, .struct_init => {
+        .table_get_atom => {
             if (inst.operands.len >= 1) {
                 out[0] = ir.valueReg(inst.operands[0]);
             } else out[0] = r;
@@ -92,13 +92,13 @@ pub fn readRegs(inst: *const ir.IrInst, out: []Register) usize {
         .pow, .pow_int, .eq, .neq, .lt, .gt, .lte, .gte,
         .eq_int, .neq_int, .lt_int, .gt_int, .lte_int, .gte_int,
         .@"and", .@"or", .tuple_get, .table_get,
-        .table_set_atom, .struct_set_offset => {
+        .table_set_atom => {
             out[0] = r;
             out[1] = r + 1;
             return 2;
         },
 
-        .table_set, .struct_set_method, .range_init => {
+        .table_set, .range_init => {
             out[0] = r;
             out[1] = r + 1;
             out[2] = r + 2;
@@ -182,8 +182,7 @@ fn isSideEffect(op: Opcode) bool {
     return switch (op) {
         // zig fmt: off
         .store_global, .store_global_const, .store_local, .bind_local,
-        .store_upval, .table_set, .table_set_atom, .struct_set_method,
-        .struct_set_offset, .struct_init, .call, .call_field, .spawn,
+        .store_upval, .table_set, .table_set_atom, .call, .call_field, .spawn,
         .join, .yield, .ret, .halt,
         .range_init, .unwrap_result
         // zig fmt: on

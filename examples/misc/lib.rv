@@ -1,16 +1,17 @@
-struct Version {
-	major: number,
-	minor: number,
-	fn is_beta(self) self.major < 1,
-	fn of_string(str) do
-		const res = str:split(".")
-			|> iter.map(fn(c) number(c))
-			|> iter.collect()
+type Version = { major: number, minor: number }
 
-		return (:ok, Version{major = res[0]?, minor = res[1]?})
-	end,
-	fn to_string(self) fmt("%v.%v", self.major, self.minor)
-}
+fn version_of_string(str) -> (:ok, Version) do
+  const res = str:split(".")
+    |> iter.map(fn(c) number(c))
+    |> iter.collect()
 
-const v = Version.of_string("1.2.3")
+  return (:ok, {
+    major = res[0]?,
+    minor = res[1]?,
+    is_beta = fn(self) self.major < 1,
+    to_string = fn(self) fmt("%v.%v", self.major, self.minor),
+  })
+end
+
+const v = version_of_string("1.2.3")
 print(v)

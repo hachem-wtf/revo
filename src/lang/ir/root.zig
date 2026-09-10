@@ -75,8 +75,8 @@ fn spanFor(i: *IrInst) usize {
         .call, .spawn => i.op_arg + 1,
         .call_field => (i.op_arg & ~@as(Operand, 1 << 7)) + 2,
         .tuple_new => i.op_arg,
-        .table_set, .struct_set_method, .range_init => 3,
-        .table_get, .table_set_atom, .struct_set_offset, .range_loop, .@"and", .@"or" => 2,
+        .table_set, .range_init => 3,
+        .table_get, .table_set_atom, .range_loop, .@"and", .@"or" => 2,
         else => 1,
     };
 }
@@ -152,10 +152,6 @@ pub fn lowerInst(alloc: std.mem.Allocator, out: *std.ArrayList(Instruction), ins
         .load_global, .load_stdlib_global, .load_upval, .closure => bc = .{ .op = op, .a = r, .bx = bxi },
         .load_local => bc = .{ .op = op, .a = r, .b = @intCast(bx) },
         .table_new => bc = .{ .op = op, .a = r },
-        .struct_init => {
-            const b = if (inst.operands.len >= 1) valueReg(inst.operands[0]) else r;
-            bc = .{ .op = op, .a = r, .b = b, .bx = bxi };
-        },
         .load_nil => bc = .{ .op = op, .a = r },
         .load_small_int => bc = .{ .op = op, .a = r, .bx = bxi },
         .load_const => bc = .{ .op = op, .a = r, .bx = bxi },
@@ -169,9 +165,8 @@ pub fn lowerInst(alloc: std.mem.Allocator, out: *std.ArrayList(Instruction), ins
         .table_set => bc = .{ .op = op, .a = r, .b = r + 1, .c = r + 2 },
         .table_get => bc = .{ .op = op, .a = r, .b = r, .c = r + 1 },
         .slice => bc = .{ .op = op, .a = r, .b = r, .c = r + 1 }, // vm reads R[b..b+4) as object/start/step/end
-        .table_set_atom, .struct_set_offset => bc = .{ .op = op, .a = r, .c = r + 1, .bx = bxi },
-        .struct_set_method => bc = .{ .op = op, .a = r, .b = r + 1, .c = r + 2 },
-        .table_get_atom, .struct_get_offset => {
+        .table_set_atom => bc = .{ .op = op, .a = r, .c = r + 1, .bx = bxi },
+        .table_get_atom => {
             const b = if (inst.operands.len >= 1) valueReg(inst.operands[0]) else r;
             bc = .{ .op = op, .a = r, .b = b, .bx = bxi };
         },

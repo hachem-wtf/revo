@@ -9,8 +9,6 @@ pub const AtomID = usize;
 pub const FunctionID = usize;
 pub const TableID = usize;
 pub const TupleID = usize;
-pub const StructTypeID = usize;
-pub const StructInstanceID = usize;
 
 pub const Type = enum(u4) {
     // stored tag nibble is bits 51-48; real values must have bit 51 set
@@ -22,9 +20,10 @@ pub const Type = enum(u4) {
     function = 10,
     table = 11,
     tuple = 12,
-    struct_val = 13,
-    struct_type = 14,
-    foreign = 15,
+    foreign = 13,
+    // latter numbers reserved for subtyping/opt
+    //   (lua likes for threads to be their own types
+    //   , i might want simple distinct bigint instead of js smi opt, etc.)
 };
 
 pub const PAYLOAD_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
@@ -78,12 +77,6 @@ pub const Data = extern struct {
         pub inline fn tuple(id: TupleID) Data {
             return Data.boxed(.tuple, id);
         }
-        pub inline fn structVal(id: StructInstanceID) Data {
-            return Data.boxed(.struct_val, id);
-        }
-        pub inline fn structType(id: StructTypeID) Data {
-            return Data.boxed(.struct_type, id);
-        }
         pub inline fn foreign(ptr: ?*anyopaque) Data {
             return Data.boxed(.foreign, @intFromPtr(ptr));
         }
@@ -130,12 +123,6 @@ pub const Data = extern struct {
     }
     pub inline fn isTuple(self: Data) bool {
         return self.tag() == .tuple;
-    }
-    pub inline fn isStructVal(self: Data) bool {
-        return self.tag() == .struct_val;
-    }
-    pub inline fn isStructType(self: Data) bool {
-        return self.tag() == .struct_type;
     }
     pub inline fn isForeign(self: Data) bool {
         return self.tag() == .foreign;
@@ -191,18 +178,6 @@ pub const Data = extern struct {
     }
     pub inline fn asTuple(self: Data) ?TupleID {
         if ((self.bits & BOX_MASK) == BOX_TAG and ((self.bits >> TAG_SHIFT) & TAG_MASK) == @intFromEnum(Type.tuple))
-            return @intCast(self.bits & PAYLOAD_MASK);
-        return null;
-    }
-    pub inline fn asStructVal(self: Data) ?StructInstanceID {
-        if ((self.bits & BOX_MASK) == BOX_TAG and
-            ((self.bits >> TAG_SHIFT) & TAG_MASK) == @intFromEnum(Type.struct_val))
-            return @intCast(self.bits & PAYLOAD_MASK);
-        return null;
-    }
-    pub inline fn asStructType(self: Data) ?StructTypeID {
-        if ((self.bits & BOX_MASK) == BOX_TAG and
-            ((self.bits >> TAG_SHIFT) & TAG_MASK) == @intFromEnum(Type.struct_type))
             return @intCast(self.bits & PAYLOAD_MASK);
         return null;
     }

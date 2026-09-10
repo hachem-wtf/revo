@@ -29,8 +29,8 @@ title: 'docs'
    * [coercion](#coercion)
    * [type narrowing](#type-narrowing)
    * [runtime type predicates](#runtime-type-predicates)
-   * [struct constructors](#struct-constructors)
-   * [struct methods](#struct-methods)
+   * [structural types](#structural-types)
+   * [table methods](#table-methods)
    * [? suffix convention](#suffix-convention)
    * [foreign](#foreign)
 - [operators](#operators)
@@ -171,15 +171,10 @@ the fundamental types are:
     a:rawset("inner", 99) # bypasses __newindex metamethod
     set_meta(a, {})  # replace the metatable
 
-    struct User { # a struct for now just makes a fn called User, which returns
-        name: string, # the type is checked at creation time
-        age: number = 42,
-        const get_age = fn(self) self.age,
-    }
-    const me = User({name = "me", age = 99})
-    # when you call a function with one argument, if that arg is a string
-    # or a table literal, you can do so without parenteheses
-    const you = User{name = "you", age = 123}
+    type User = { name: string, age: number, get_age: function }
+    fn get_age(self: User) self.age
+    let me: User = { name = "me", age = 99, get_age = get_age }
+    const you: User = { name = "you", age = 123, get_age = get_age }
     print(you:get_age())
     ```
     they are always passed by reference, never copied unless you manually `{1,2,3}:copy()`
@@ -396,7 +391,7 @@ type expression syntax:
 
 | syntax | meaning |
 |--------|---------|
-| `int` | built-in name or struct |
+| `int` | built-in name or alias |
 | `int?` | `int \| :nil` (optional sugar) |
 | `int \| string` | union type |
 | `(int, string)` | tuple type |
@@ -520,7 +515,7 @@ else
     x
 ```
 
-supported predicates: `number?`, `string?`, `bool?`, `table?`, `atom?`, `function?`, `tuple?`, `struct?`, `type?`, `foreign?`
+supported predicates: `number?`, `string?`, `table?`, `atom?`, `function?`, `tuple?`, `foreign?`
 
 ## runtime type predicates
 
@@ -546,53 +541,43 @@ type({})       # :table
 type((1, 2))   # :tuple
 ```
 
-## struct constructors
+## structural types
 
-struct constructors validate fields at runtime:
+tables carry fields and closures; structural types describe their shape:
 
 ```revo
-struct Person { name: string, age: number }
+type Person = { name: string, age: number }
 
 # ok
-let p = Person({name = "alice", age = 30})
-
-# runtime error: unknown field
-Person({bad = 42})
-
-# runtime error: missing required field
-Person({name = "bob"})
+let p: Person = { name = "alice", age = 30 }
 ```
 
-field writes also validate at runtime:
+field writes just work:
 
 ```revo
-struct Point { x: number, y: number }
-let p = Point({x = 0, y = 0})
-# runtime TypeError: field `y` expected number, got string
-p.y = "bad"
+type Point = { x: number, y: number }
+let p: Point = { x = 0, y = 0 }
+p.y = 12
 ```
 
-## struct methods
+## table methods
 
-methods are declared inside the struct body with `fn` and receive `self` as the first
-argument:
+methods are closures stored in the table and receive `self` as the first
+argument. method fields go in the type too, so colon calls resolve to
+them instead of stdlib methods with the same name:
 
 ```revo
-struct Counter {
-    n: number,
-    fn inc(self, amount) do
-        self.n = self.n + amount
-    end,
+type Counter = { n: number, inc: function }
+let c: Counter = {
+  n = 0,
+  inc = fn(self, amount) do
+    self.n = self.n + amount
+  end,
 }
 
-let c = Counter({n = 0})
 c:inc(5)
 print(c.n) # 5
 ```
-
-methods can only be declared inside the struct definition; adding one after the fact
-(`fn Counter:inc(...) ... end`) is a compile error. this lets the compiler know every
-method at compile time instead of looking them up at runtime
 
 ## `?` suffix convention
 
@@ -874,16 +859,10 @@ assert_eq(poly("asdf"), "str")
 assert_eq(poly(42), "num")
 
 # ad-hoc polymorphism via method dispatch
-struct Foo {
-  age: number = 67,
-  fn display(self) fmt("a %d-yr old", self.age),
-}
-struct Bar {
-  name: string = "molly",
-  fn display(self) fmt("someone named %s", self.name),
-}
+type Foo = { age: number, display: function }
+type Bar = { name: string, display: function }
 
-let x = Foo({age = 10})
+let x: Foo = { age = 10, display = fn(self) fmt("a %d-yr old", self.age) }
 # resolves to x.display(x) (or x:display())
 x |> _:display() |> print
 ```

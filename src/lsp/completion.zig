@@ -28,7 +28,6 @@ pub fn completions(
                 .keyword => .Keyword,
                 .function => .Function,
                 .module => .Module,
-                .struct_type => .Struct,
                 .variable => .Variable,
                 .field => .Field,
                 .class => .Class,

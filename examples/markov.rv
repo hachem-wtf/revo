@@ -8,25 +8,25 @@
  \    and put a path to it in this variable
  \    vvvvvvvvvvv
 !#
-const CORPUS_PATH = "_ign-data-smaller.txt"
-struct Rng {
-  state = 1,
 
-  fn next(self, n: int) do
-    self.state = (self.state * 1103515245 + 12345) % 2147483648
-    self.state % n
-    # |> inspect
-  end,
-}
+const CORPUS_PATH = "_ign-data-smaller.txt"
+type Rng = { state: number, next: function }
+
+fn rng_next(self: Rng, n: int) do
+  self.state = (self.state * 1103515245 + 12345) % 2147483648
+  self.state % n
+  # |> inspect
+end
+
 test "rng doesnt output 0" do
-  const rng = Rng{state = time.monotonic_ns()}
+  const rng: Rng = { state = time.monotonic_ns(), next = rng_next }
   for i in 0..100 do
     if not rng:next(1000) != 0
       print("got 0 on ", i) and return (:err, :UhOh)
   end
 end
 
-const rng = Rng{state = time.monotonic_ns()}
+const rng: Rng = { state = time.monotonic_ns(), next = rng_next }
 
 fn pref(a: any, b: any) fmt("%v %v", a, b)
 
@@ -39,20 +39,17 @@ end
 const NOWORD = string.of_ascii(10)
 
 #* markov chain *#
-struct Chain {
-  state = {},
-  starts = {},
-  sent_starts = {},
+type Chain = { state: table<string, table>, starts: table, sent_starts: table, add: function, train: function, take: function }
 
-  fn add(self, idx: int, val: string) do
-    # missing keys come back as :undef, so we can create the bucket lazily
-    if not self.state[idx]
-      self.state[idx] = {}
+fn chain_add(self: Chain, idx: int, val: string) do
+  # missing keys come back as :undef, so we can create the bucket lazily
+  if not self.state[idx]
+    self.state[idx] = {}
 
-    self.state[idx]:push(val)
-  end,
+  self.state[idx]:push(val)
+end
 
-  fn train(self, corpus: string) do
+fn chain_train(self: Chain, corpus: string) do
     # normalize line breaks and split punctuation so the chain sees more shape
     const all_w =
       fs.open(corpus)?:read()?
@@ -92,9 +89,9 @@ struct Chain {
       self.sent_starts:push((w1, w2))
     end
     self:add(pref(w1, w2), NOWORD)
-  end,
+end
 
-  fn take(self, params: table) -> string do
+fn chain_take(self: Chain, params: table) -> string do
     if not (let count: int = params.count)
       panic("params must contain a count")
 
@@ -165,13 +162,9 @@ struct Chain {
     out = out:replace("  ", " ")
 
     out
-  end
-}
+end
 
-# TODO: state is defaulted and it shouldn't be a compiler error here
-const c = Chain{state = {}, starts = {}, sent_starts = {}}
+let c: Chain = { state = {}, starts = {}, sent_starts = {}, add = chain_add, train = chain_train, take = chain_take }
 c:train(CORPUS_PATH)?
 
 print(c:take({count = 500}))
-# TODO: you should be able to do this:
-# let x = Chain.take(c, 50)?

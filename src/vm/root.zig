@@ -22,7 +22,6 @@ pub const ProgramCounter = @import("VM.zig").ProgramCounter;
 pub const core_atoms = @import("core.zig").core_atoms;
 pub const isFalse = @import("memory.zig").isFalse;
 pub const Scheduler = @import("scheduler.zig").Scheduler;
-pub const struct_mod = @import("struct.zig");
 pub const table = @import("table.zig");
 pub const tests = @import("tests.zig");
 pub const tuple = @import("tuple.zig");

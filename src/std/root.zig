@@ -30,11 +30,6 @@ pub const Impl = struct {
     }
 
     pub fn @"type"(vm: *VM, val: T.any) !HostResult {
-        if (val.asStructVal()) |instance_id| {
-            const instance = vm.struct_instances.get(instance_id) catch
-                return .data(Data.new.atom(try vm.internAtom("struct")));
-            return .data(Data.new.structType(instance.type_id));
-        }
         return .data(Data.new.atom(try vm.internAtom(@import("root.zig").typeof(val, vm))));
     }
 
@@ -523,29 +518,18 @@ pub fn inspect(args: []const Data, vm: *VM) !HostResult {
 }
 
 pub fn typeof(d: Data, vm: *VM) []const u8 {
-    if (d.asStructVal()) |instance_id| {
-        const instance = vm.struct_instances.get(instance_id) catch return "struct";
-        const desc = vm.struct_types.getType(instance.type_id) orelse return "struct";
-        return desc.name;
-    }
+    _ = vm;
     return switch (d.tag()) {
         .atom => if (d.asAtom().? == revo.core_atoms.atomId(.nil)) "nil" else "atom",
-        .struct_val => "struct",
-        .struct_type => "type",
         else => |e| @tagName(e),
     };
 }
 
-/// > typeof(arg0: any) -> atom|type
+/// > typeof(arg0: any) -> atom
 /// returns type of arg0 as atom
 /// possible values: nil, num, string, atom, function, table, tuple,
-/// type, foreign; struct values return the struct type itself, which is callable
+/// foreign
 pub fn typeof_(args: []const Data, vm: *VM) !HostResult {
-    if (args[0].asStructVal()) |instance_id| {
-        const instance = vm.struct_instances.get(instance_id) catch
-            return .data(Data.new.atom(try vm.internAtom("struct")));
-        return .data(Data.new.structType(instance.type_id));
-    }
     return .data(Data.new.atom(try vm.internAtom(typeof(args[0], vm))));
 }
 
@@ -1210,10 +1194,6 @@ test "type predicates" {
 
     try testing.topTrue("tuple?((1, 2))");
     try testing.topFalse("tuple?(42)");
-    try testing.topTrue("struct Foo { x = 1 } struct_val?(Foo{})");
-    try testing.topFalse("struct Foo { x = 1 } struct_val?(42)");
-    try testing.topTrue("struct Foo { x = 1 } struct_type?(Foo)");
-    try testing.topFalse("struct Foo { x = 1 } struct_type?(42)");
 }
 
 test "debug() links its nested flags table without a stale pointer" {

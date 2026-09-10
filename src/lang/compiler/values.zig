@@ -6,7 +6,6 @@ const Compiler = revo.lang.compiler.Compiler;
 
 const ast = @import("../ast.zig");
 const Node = ast.Node;
-const StructItem = ast.StructItem;
 const flow = @import("flow.zig");
 const state = @import("state.zig");
 const ir = @import("../ir/root.zig");
@@ -50,7 +49,6 @@ pub fn compileLocalBinding(
             name,
             null,
             value.expr.fn_expr.type_params,
-            null,
         );
     } else {
         // hide the binding's own name from its initializer so `x() = x()` and
@@ -281,41 +279,7 @@ fn compileAssignSimple(
             }
         },
         .field => |field| {
-            const object_type = type_check.inferExprType(self, field.object);
-            switch (object_type.tag) {
-                .struct_type => |type_name| {
-                    const type_id = self.vm.struct_types.findTypeByName(type_name) orelse {
-                        // fallback to table set if struct not found
-                        try compileFieldAssign(self, field.object, field.name, value);
-                        return;
-                    };
-                    const desc = self.vm.struct_types.getType(type_id) orelse {
-                        try compileFieldAssign(self, field.object, field.name, value);
-                        return;
-                    };
-                    const field_atom = try self.vm.internAtom(field.name);
-                    const field_offset = desc.field_index.get(field_atom) orelse {
-                        try compileFieldAssign(self, field.object, field.name, value);
-                        return;
-                    };
-
-                    try self.compile(field.object, true);
-                    try self.regDupe();
-                    try self.compile(value, true);
-                    try self.emit(.struct_set_offset, @intCast(field_offset));
-                    try self.emit(.struct_get_offset, @intCast(field_offset));
-                },
-                else => {
-                    // table field access: set field, return value as expression result
-                    const key_atom = try self.vm.internAtom(field.name);
-                    try self.compile(field.object, true);
-                    try self.regDupe();
-                    try self.compile(value, true);
-                    try self.emit(.table_set_atom, key_atom);
-                    try self.emit(.table_get_atom, key_atom);
-                    try widenLocalTableHint(self, field.object, field.name, value);
-                },
-            }
+            try compileFieldAssign(self, field.object, field.name, value);
         },
         .index => |index| {
             try self.compile(index.object, true);
@@ -355,8 +319,8 @@ fn compileAssignSimple(
         else => {
             const msg = try std.fmt.allocPrint(
                 self.alloc,
-                "bad assignment target: {}",
-                .{target.*},
+                "bad assignment target: {s}",
+                .{@tagName(target.expr)},
             );
             return self.fail(.InvalidAssignmentTarget, target, msg);
         },
@@ -409,127 +373,6 @@ fn compileFieldAssign(
     try widenLocalTableHint(self, field_obj, field_name, value);
 }
 
-pub fn compileStruct(
-    self: *Compiler,
-    expr: *const Node,
-    name: []const u8,
-    items: []const StructItem,
-) !void {
-    var field_defs = try std.ArrayList(types_mod.FieldDef).initCapacity(
-        self.alloc,
-        items.len,
-    );
-    defer field_defs.deinit(self.alloc);
-
-    var seen = std.StringHashMap(bool).init(self.alloc);
-    defer seen.deinit();
-
-    for (items) |item| {
-        if (item == .field) {
-            const fname = item.field.name;
-            if (seen.get(fname) != null) {
-                const msg = try std.fmt.allocPrint(
-                    self.alloc,
-                    "duplicate field `{s}` in struct `{s}`",
-                    .{ fname, name },
-                );
-                var tmp_node: Node = .{
-                    .span = item.field.name_span,
-                    .expr = .nil,
-                };
-                return self.fail(.ParseError, &tmp_node, msg);
-            } else {
-                try seen.put(fname, true);
-                const field_type: types_mod.TypeInfo = if (item.field.type_name) |tn|
-                    try type_serde.evalTypeExpr(self, tn)
-                else
-                    .{ .tag = .any };
-                try field_defs.append(self.alloc, .{
-                    .name = item.field.name,
-                    .field_type = field_type,
-                    .type_name = if (item.field.type_name) |tn| switch (tn.kind) {
-                        .named => |n| n,
-                        else => try type_serde.formatTypeOpts(self.alloc, field_type, .{ .short = true }),
-                    } else null,
-                    .default_val = if (item.field.default_value) |dv|
-                        evalConstNode(self, dv)
-                    else
-                        null,
-                });
-            }
-        }
-    }
-
-    const field_slice = try field_defs.toOwnedSlice(self.alloc);
-    errdefer self.alloc.free(field_slice);
-
-    if (self.struct_layouts.fetchRemove(name)) |kv| self.alloc.free(kv.value);
-    try self.struct_layouts.put(name, field_slice);
-
-    const type_id = if (field_slice.len > 0) blk: {
-        var fields = try std.ArrayList(revo.vm.struct_mod.StructField).initCapacity(self.alloc, field_slice.len);
-        defer fields.deinit(self.alloc);
-        for (field_slice) |d| {
-            try fields.append(self.alloc, .{
-                .name_atom = try self.vm.internAtom(d.name),
-                .default_val = d.default_val,
-            });
-        }
-        break :blk try self.vm.struct_types.registerType(
-            name,
-            fields.items,
-            std.StringHashMap(revo.memory.Data).init(self.vm.runtime.alloc),
-        );
-    } else try self.vm.struct_types.registerType(
-        name,
-        &.{},
-        std.StringHashMap(revo.memory.Data).init(self.vm.runtime.alloc),
-    );
-
-    // bind the .struct_type constant to the struct name
-    const slot = try state.reuseOrDeclareLocal(self, name, false);
-    state.reserveLocalSlots(self);
-    try self.@"const"(Data.new.structType(type_id));
-    state.markLocalInitialized(self, slot);
-    try self.regDupe();
-    try self.emit(.bind_local, slot);
-
-    // compile meth binds & store in pool via rt calls
-    for (items) |item| switch (item) {
-        .binding => |b| {
-            if (b.target.expr != .ident) {
-                const msg = try std.fmt.allocPrint(
-                    self.alloc,
-                    "assignment target must be named: {}",
-                    .{b.target.*},
-                );
-                return self.fail(.UnsupportedSyntax, expr, msg);
-            }
-            const key_atom = try self.vm.internAtom(b.target.expr.ident);
-            try flow.emitStorageLoad(self, .{ .local = slot });
-            try self.@"const"(Data.new.atom(key_atom));
-            if (b.value.expr == .fn_expr)
-                try self.compileFn(
-                    b.value.expr.fn_expr.params,
-                    b.value.expr.fn_expr.return_type,
-                    b.value.expr.fn_expr.body,
-                    b.target.expr.ident,
-                    null,
-                    b.value.expr.fn_expr.type_params,
-                    .{ .tag = .{ .struct_type = name } },
-                )
-            else
-                try self.compile(b.value, true);
-            try self.emit(.struct_set_method, 0);
-            try self.regRelease();
-        },
-        .field => {},
-    };
-
-    if (state.currentFunctionState(self) != null)
-        try state.setLocalTypeHint(self, name, .{ .tag = .{ .struct_type = name } });
-}
-
 pub fn compileTable(self: *Compiler, entries: []const ast.TableEntry) !void {
     try self.emit(.table_new, 0);
     var array_index: i64 = 0;
@@ -565,7 +408,6 @@ pub fn compileTable(self: *Compiler, entries: []const ast.TableEntry) !void {
                     name,
                     null,
                     b.value.expr.fn_expr.type_params,
-                    null,
                 );
             } else {
                 try self.compile(try isolateEntryDecls(self, entry.value), true);
@@ -626,38 +468,10 @@ pub const IsolationVisitor = struct {
     pub fn visit(self: *IsolationVisitor, node: *const Node) void {
         if (self.found) return;
         switch (node.expr) {
-            .decl, .binding, .import_stmt, .struct_def, .loop_expr, .for_loop, .while_loop, .labeled_block => self.found = true,
+            .decl, .binding, .import_stmt, .loop_expr, .for_loop, .while_loop, .labeled_block => self.found = true,
             // fn frames isolate themselves already
             .fn_expr => {},
             else => ast.walkAST(IsolationVisitor, self, node),
         }
     }
 };
-
-fn evalConstNode(self: *Compiler, node: *const Node) ?Data {
-    switch (node.expr) {
-        .number => |n| return Data.new.num(n.value),
-        .string => |s| return self.vm.ownDataString(s) catch return null,
-        .multiline_string => |s| return self.vm.ownDataString(s) catch return null,
-        .hash => |h| return self.vm.dataAtom(h) catch return null,
-        .nil => return revo.Data.new.core(.nil),
-        .table => |entries| {
-            const t_id = self.vm.tables.create() catch return null;
-            const table = self.vm.tables.get(t_id) catch return null;
-            var array_index: i64 = 0;
-            for (entries) |entry| {
-                if (entry.key) |key| {
-                    const key_val = evalConstNode(self, key) orelse return null;
-                    const val = evalConstNode(self, entry.value) orelse return null;
-                    table.putRaw(key_val, val, self.vm) catch return null;
-                } else {
-                    const val = evalConstNode(self, entry.value) orelse return null;
-                    table.putRaw(Data.new.num(@as(f64, @floatFromInt(array_index))), val, self.vm) catch return null;
-                    array_index += 1;
-                }
-            }
-            return Data.new.table(t_id);
-        },
-        else => return null,
-    }
-}
