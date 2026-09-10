@@ -4,7 +4,7 @@
 pub declare net.connect = fn(host: string, port: num) -> !table
 
 #* listens for incoming connections on the given port, returns server socket *#
-pub declare net.listen = fn(port: num, backlog: num?...) -> !table
+pub declare net.listen = fn(port: num, ?backlog: num...) -> !table
 
 #* accepts an incoming client connection on a server socket *#
 pub declare socket.accept = fn(self: table) -> !table

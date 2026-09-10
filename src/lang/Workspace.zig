@@ -890,19 +890,19 @@ pub fn signatureHelp(
             const params = try alloc.alloc(ParamInfo, spec.params.len);
             errdefer alloc.free(params);
             for (spec.params, 0..) |p, i| {
-                // parseTypeString can return shared comptime sentinels
-                const pt: ?types.TypeInfo = if (p[1].len > 0) pt: {
-                    const t = try type_serde.parseTypeString(type_serde.BareCtx{ .alloc = alloc }, p[1]);
+                // evalTypeExpr can return shared comptime sentinels
+                const pt: ?types.TypeInfo = if (p.type_name) |tn| pt: {
+                    const t = try type_serde.evalTypeExpr(type_serde.BareCtx{ .alloc = alloc }, tn);
                     break :pt try types.clone(t, alloc);
                 } else null;
                 params[i] = .{
-                    .name = try alloc.dupe(u8, p[0]),
+                    .name = try alloc.dupe(u8, p.name),
                     .type_name = pt,
                 };
             }
 
-            const ret: ?types.TypeInfo = if (spec.ret.len > 0) ret: {
-                const t = try type_serde.parseTypeString(type_serde.BareCtx{ .alloc = alloc }, spec.ret);
+            const ret: ?types.TypeInfo = if (spec.ret) |r| ret: {
+                const t = try type_serde.evalTypeExpr(type_serde.BareCtx{ .alloc = alloc }, r);
                 break :ret try types.clone(t, alloc);
             } else null;
 
@@ -1276,7 +1276,7 @@ const ParamHintVisitor = struct {
         }
         if (revo.std_lib.api.find(name)) |spec| {
             var out = std.ArrayList([]const u8).empty;
-            for (spec.params) |p| out.append(self.alloc, p[0]) catch return &.{};
+            for (spec.params) |p| out.append(self.alloc, p.name) catch return &.{};
             return out.toOwnedSlice(self.alloc) catch &.{};
         }
         return &.{};
@@ -1884,7 +1884,7 @@ const SigVisitor = struct {
     sig_map: *std.StringHashMapUnmanaged(FnSig),
     alloc: std.mem.Allocator,
 
-    /// parseTypeString can return shared comptime sentinels or strings borrowing ast
+    /// evalTypeExpr can return shared comptime sentinels or types borrowing ast
     /// sig_map can outlive both so we need deepcopy
     fn ownedType(self: *@This(), te: *const lang.ast.TypeExpr) ?types.TypeInfo {
         const t = type_serde.evalTypeExpr(type_serde.BareCtx{ .alloc = self.alloc }, te) catch return null;
@@ -3011,15 +3011,24 @@ fn addGeneralCompletions(
                     const names = try arena.alloc([]const u8, spec.params.len);
                     const param_types = try arena.alloc([]const u8, spec.params.len);
                     for (spec.params, 0..) |p, i| {
-                        names[i] = p[0];
-                        param_types[i] = p[1];
+                        names[i] = p.name;
+                        var type_buf = std.Io.Writer.Allocating.init(arena);
+                        defer type_buf.deinit();
+                        if (p.type_name) |tn| try type_serde.printTypeExpr(tn, &type_buf.writer);
+                        if (p.variadic) try type_buf.writer.writeAll("...");
+                        param_types[i] = try type_buf.toOwnedSlice();
                     }
                     const sig = try callSignature(
                         arena,
                         name,
                         names,
                         param_types,
-                        if (spec.ret.len > 0) spec.ret else null,
+                        if (spec.ret) |r| blk: {
+                            var ret_buf = std.Io.Writer.Allocating.init(arena);
+                            defer ret_buf.deinit();
+                            try type_serde.printTypeExpr(r, &ret_buf.writer);
+                            break :blk try ret_buf.toOwnedSlice();
+                        } else null,
                     );
                     detail = sig.detail;
                     insert_text = sig.insert_text;

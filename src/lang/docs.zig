@@ -8,7 +8,6 @@ const pretty = revo.pretty;
 
 pub const FnSpec = api.FnSpec;
 pub const FieldSpec = api.FieldSpec;
-const headOf = api.headOf;
 
 const bold = "\x1b[1m";
 const dim = "\x1b[2m";
@@ -121,13 +120,6 @@ fn sortByName(list: []Planned) void {
     }.less);
 }
 
-fn methodPrefix(sig: []const u8) ?[]const u8 {
-    const end = std.mem.indexOfScalar(u8, sig, '(') orelse sig.len;
-    const head = sig[0..end];
-    const i = std.mem.indexOfScalar(u8, head, ':') orelse return null;
-    return head[0..i];
-}
-
 /// strips the `Target:` prefix off a method's signature, since it's
 /// kinda useless once the method is alreaday under its types group
 fn stripMethodPrefix(sig: []const u8) []const u8 {
@@ -180,7 +172,7 @@ fn slugify(alloc: std.mem.Allocator, name: []const u8) ![]const u8 {
 fn collectGlobals(alloc: std.mem.Allocator, specs: []*const FnSpec) !std.ArrayList(Planned) {
     var planned = std.ArrayList(Planned).empty;
     for (specs) |s| {
-        if (headOf(s.sig).kind == .global) try planned.append(alloc, .{ .spec = s });
+        if (s.head.kind == .global) try planned.append(alloc, .{ .spec = s });
     }
     sortByName(planned.items);
     return planned;
@@ -190,7 +182,7 @@ fn collectModuleNames(alloc: std.mem.Allocator, specs: []*const FnSpec) !std.Arr
     var set = std.StringHashMapUnmanaged(void){};
     defer set.deinit(alloc);
     for (specs) |s| {
-        const head = headOf(s.sig);
+        const head = s.head;
         if (head.kind == .module) try set.put(alloc, head.module.?, {});
     }
     var names = std.ArrayList([]const u8).empty;
@@ -203,7 +195,7 @@ fn collectModuleNames(alloc: std.mem.Allocator, specs: []*const FnSpec) !std.Arr
 fn collectModule(alloc: std.mem.Allocator, specs: []*const FnSpec, mod_name: []const u8) !std.ArrayList(Planned) {
     var planned = std.ArrayList(Planned).empty;
     for (specs) |s| {
-        const head = headOf(s.sig);
+        const head = s.head;
         if (head.kind == .module and std.mem.eql(u8, head.module.?, mod_name)) {
             try planned.append(alloc, .{ .spec = s });
         }
@@ -216,7 +208,7 @@ fn collectMethodTargets(alloc: std.mem.Allocator, specs: []*const FnSpec) !std.A
     var set = std.StringHashMapUnmanaged(void){};
     defer set.deinit(alloc);
     for (specs) |s| {
-        if (methodPrefix(s.sig)) |prefix| try set.put(alloc, prefix, {});
+        if (s.head.target_name) |prefix| try set.put(alloc, prefix, {});
     }
     var names = std.ArrayList([]const u8).empty;
     var it = set.keyIterator();
@@ -228,7 +220,7 @@ fn collectMethodTargets(alloc: std.mem.Allocator, specs: []*const FnSpec) !std.A
 fn collectMethods(alloc: std.mem.Allocator, specs: []*const FnSpec, target_name: []const u8) !std.ArrayList(Planned) {
     var planned = std.ArrayList(Planned).empty;
     for (specs) |s| {
-        if (std.mem.eql(u8, methodPrefix(s.sig) orelse "", target_name)) {
+        if (std.mem.eql(u8, s.head.target_name orelse "", target_name)) {
             try planned.append(alloc, .{ .spec = s });
         }
     }

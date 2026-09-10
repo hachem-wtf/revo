@@ -197,7 +197,7 @@ const SemanticChecker = struct {
             const spec = find_global: {
                 for (revo.std_lib.api.full_specs) |group| for (group) |*s| {
                     if (!std.mem.eql(u8, s.name, name)) continue;
-                    if (revo.std_lib.api.headOf(s.sig).kind == .global) break :find_global s;
+                    if (s.head.kind == .global) break :find_global s;
                 };
                 break :find_global revo.std_lib.api.find(name);
             } orelse continue;
@@ -534,7 +534,7 @@ const SemanticChecker = struct {
             const module_name = object.expr.ident;
             for (revo.std_lib.api.full_specs) |group| for (group) |*spec| {
                 if (!std.mem.eql(u8, spec.name, name)) continue;
-                const head = revo.std_lib.api.headOf(spec.sig);
+                const head = spec.head;
                 if (head.kind == .module and std.mem.eql(u8, head.module.?, module_name)) {
                     if (self.makeStdlibSig(spec) catch null) |sig| {
                         return .{ .tag = .{ .function = sig } };
@@ -547,29 +547,28 @@ const SemanticChecker = struct {
 
     fn makeStdlibSig(self: *SemanticChecker, spec: *const revo.std_lib.api.FnSpec) !?*const FnSig {
         if (self.sig_cache.get(spec)) |sig| return sig;
-        const type_params = try type_serde.sigTypeParams(self.alloc, spec.sig);
         const saved = self.current_type_params;
-        self.current_type_params = type_params;
+        self.current_type_params = spec.type_params;
         defer self.current_type_params = saved;
 
         var param_types = try std.ArrayList(types_mod.TypeInfo).initCapacity(self.alloc, spec.params.len);
         var param_names = try std.ArrayList([]const u8).initCapacity(self.alloc, spec.params.len);
 
         for (spec.params) |p| {
-            try param_names.append(self.alloc, p[0]);
-            try param_types.append(self.alloc, type_serde.parseTypeString(self, p[1]) catch types_mod.TypeInfo{ .tag = .any });
+            try param_names.append(self.alloc, p.name);
+            try param_types.append(self.alloc, if (p.type_name) |tn| type_serde.evalTypeExpr(self, tn) catch types_mod.TypeInfo{ .tag = .any } else types_mod.TypeInfo{ .tag = .any });
         }
 
         const names_slice = try param_names.toOwnedSlice(self.alloc);
         const types_slice = try param_types.toOwnedSlice(self.alloc);
 
-        const ret = type_serde.parseTypeString(self, spec.ret) catch types_mod.TypeInfo{ .tag = .any };
+        const ret = if (spec.ret) |r| type_serde.evalTypeExpr(self, r) catch types_mod.TypeInfo{ .tag = .any } else types_mod.TypeInfo{ .tag = .any };
         const sig = try types_mod.newSignature(self.alloc, .{
             .param_names = names_slice,
             .params = types_slice,
             .return_type = ret,
             .required_count = spec.f.arity,
-            .type_params = type_params,
+            .type_params = spec.type_params,
             .doc = if (spec.doc.len > 0) spec.doc else null,
         });
 
@@ -1443,7 +1442,7 @@ const SemanticChecker = struct {
                     // (e.g. `read` vs `file:read`); match the call kind
                     for (revo.std_lib.api.full_specs) |group| for (group) |*s| {
                         if (!std.mem.eql(u8, s.name, name)) continue;
-                        const head = revo.std_lib.api.headOf(s.sig);
+                        const head = s.head;
                         if (call.implicit_self and head.kind == .method) break :find_spec s;
                         if (!call.implicit_self and head.kind == .global) break :find_spec s;
                     };
@@ -1641,7 +1640,7 @@ const SemanticChecker = struct {
         for (revo.std_lib.api.full_specs) |group| {
             for (group) |*spec| {
                 if (!std.mem.eql(u8, spec.name, name)) continue;
-                const head = revo.std_lib.api.headOf(spec.sig);
+                const head = spec.head;
                 if (head.kind == .method) {
                     if (head.target) |t| if (std.meta.activeTag(t) == std.meta.activeTag(target)) return spec;
                 }
@@ -1661,7 +1660,7 @@ const SemanticChecker = struct {
         for (revo.std_lib.api.full_specs) |group| {
             for (group) |*spec| {
                 if (!std.mem.eql(u8, spec.name, name)) continue;
-                const head = revo.std_lib.api.headOf(spec.sig);
+                const head = spec.head;
                 if (head.kind == .module and std.mem.eql(u8, head.module.?, module_name)) return spec;
             }
         }
