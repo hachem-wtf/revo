@@ -38,6 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       into dependency members with bogus lines
 
 - std:
+  - `hash(any) -> num`
   - `fs`:
     - `fs.open(path, mode?)`: mode is `"r"` (default, opens existing), `"w"`
       (creates or truncates), `"a"` (creates or keeps)

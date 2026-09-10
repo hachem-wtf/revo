@@ -64,3 +64,5 @@ pub declare print = fn(args: any...) -> :ok
 #* returns a fresh unique symbol-like string, for macro hygiene *#
 pub declare gensym = fn() -> string
 
+#* hashes any value *#
+pub declare hash = fn(val: any) -> num

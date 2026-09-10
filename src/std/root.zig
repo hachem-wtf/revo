@@ -62,6 +62,10 @@ pub const Impl = struct {
         defer vm.runtime.alloc.free(name);
         return .data(try vm.ownDataStringNoDedup(name));
     }
+
+    pub fn hash(vm: *VM, val: T.any) !HostResult {
+        return .data(Data.new.num(val.hash(vm)));
+    }
 };
 
 pub const root_impls: []const api.Impl = impls(Impl).val ++ &[_]api.Impl{

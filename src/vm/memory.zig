@@ -206,7 +206,7 @@ pub const Data = extern struct {
     }
 
     ///
-    /// hash by value semantics, matching Table.keyEq
+    /// hash by value semantics, matching compare.fastEq
     ///
     /// ~ numbers/atoms by bits
     /// ~ strings and tuples by content
