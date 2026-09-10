@@ -233,6 +233,13 @@ pub const Table = struct {
             status: enum(u8) { empty, occupied } = .empty,
             key: Data = Data.new.nil(),
             val: Data = Data.new.nil(),
+            // cached hashKey(key)
+            // ~ computed once at insertion
+            // ~ grow() and remove()'s backward-shift repair both
+            //   need each stored key's hash again later
+            //   reading it here avoids rehashing string/tuple
+            //   content they already hashed once
+            hash: u64 = 0,
             next: u32 = NULL_ID,
             prev: u32 = NULL_ID,
         };
@@ -272,7 +279,9 @@ pub const Table = struct {
                 try self.grow(alloc, vm);
 
             const mask: u32 = @intCast(self.buckets.len - 1);
-            var idx = @as(u32, @truncate(hashKey(key, vm))) & mask;
+            const kh = hashKey(key, vm);
+            var idx = @as(u32, @truncate(kh)) & mask;
+
             while (self.buckets[idx].status == .occupied) {
                 if (keyEq(self.buckets[idx].key, key, vm))
                     return &self.buckets[idx].val;
@@ -282,9 +291,11 @@ pub const Table = struct {
             self.buckets[idx] = .{
                 .status = .occupied,
                 .key = key,
+                .hash = kh,
                 .next = NULL_ID,
                 .prev = self.last,
             };
+
             if (self.last != NULL_ID) self.buckets[self.last].next = idx;
             self.first = if (self.first == NULL_ID) idx else self.first;
             self.last = idx;
@@ -294,6 +305,10 @@ pub const Table = struct {
         }
 
         fn grow(self: *HashPart, alloc: std.mem.Allocator, vm: *revo.VM) !void {
+            // bucket hashes are cached now,
+            // so we dontn need to re-hash keys here
+            _ = vm;
+
             const new_len = if (self.buckets.len == 0) @as(u32, INIT_CAP) else @as(
                 u32,
                 @truncate(self.buckets.len * 2),
@@ -308,7 +323,7 @@ pub const Table = struct {
 
             while (cur != NULL_ID) {
                 const old = &self.buckets[cur];
-                var ni: u32 = @truncate(hashKey(old.key, vm) & (new_len - 1));
+                var ni: u32 = @truncate(old.hash & (new_len - 1));
                 while (new_buckets[ni].status == .occupied)
                     ni = (ni + 1) & (new_len - 1);
 
@@ -316,6 +331,7 @@ pub const Table = struct {
                     .status = .occupied,
                     .key = old.key,
                     .val = old.val,
+                    .hash = old.hash,
                     .next = NULL_ID,
                     .prev = new_last,
                 };
@@ -348,7 +364,7 @@ pub const Table = struct {
             var hole = idx;
             var probe = (hole + 1) & mask;
             while (self.buckets[probe].status == .occupied) : (probe = (probe + 1) & mask) {
-                const natural: u32 = @truncate(hashKey(self.buckets[probe].key, vm) & mask);
+                const natural: u32 = @truncate(self.buckets[probe].hash & mask);
                 const in_range = if (hole < probe)
                     natural > hole and natural <= probe
                 else
