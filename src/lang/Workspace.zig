@@ -810,8 +810,15 @@ fn renderRecordWithValues(
 
     for (fields, 0..) |f, i| {
         if (i > 0) try buf.writer.writeAll(", ");
-        try buf.writer.writeAll(f.name);
-        try buf.writer.writeAll(": ");
+        // implicit entries (all-digit names) render as `type = value`
+        const is_implicit = f.name.len > 0 and blk: {
+            for (f.name) |c| if (!std.ascii.isDigit(c)) break :blk false;
+            break :blk true;
+        };
+        if (!is_implicit) {
+            try buf.writer.writeAll(f.name);
+            try buf.writer.writeAll(": ");
+        }
         const ft = try f.field_type.formatType(alloc);
         defer alloc.free(ft);
         try buf.writer.writeAll(ft);
@@ -839,7 +846,6 @@ fn renderRecordDisplay(alloc: std.mem.Allocator, sym: Symbol) ![]const u8 {
 
     const fields = ti.tag.table.fields orelse return "";
     const previews = sym.field_values orelse return "";
-
     if (previews.len == 0) return "";
     const record = try renderRecordWithValues(alloc, fields, previews);
     defer alloc.free(record);
@@ -2537,16 +2543,38 @@ const SymbolVisitor = struct {
     /// null when nothing previewable
     fn tableFieldPreviews(self: *@This(), entries: []const lang.ast.TableEntry) ?[]FieldPreview {
         var out = std.ArrayList(FieldPreview).initCapacity(self.alloc, entries.len) catch return null;
+        var implicit_idx: u32 = 0;
         for (entries) |entry| {
-            const name = lang.ast.staticFieldName(entry) orelse continue;
-            const span = entry.value.span;
-            if (span.end > self.text.len or span.start > span.end) continue;
-            const slice = self.text[span.start..span.end];
-            if (slice.len == 0 or std.mem.indexOfScalar(u8, slice, '\n') != null) continue;
-            out.append(self.alloc, .{
-                .name = self.alloc.dupe(u8, name) catch return null,
-                .preview = self.alloc.dupe(u8, slice) catch return null,
-            }) catch return null;
+            if (entry.key == null and entry.value.expr == .decl and
+                entry.value.expr.decl.inner.expr == .binding and
+                entry.value.expr.decl.inner.expr.binding.value.expr == .fn_expr)
+                continue;
+
+            const name = lang.ast.staticFieldName(entry);
+            if (name) |n| {
+                const span = entry.value.span;
+                if (span.end > self.text.len or span.start > span.end) continue;
+                const slice = self.text[span.start..span.end];
+                if (slice.len == 0 or std.mem.indexOfScalar(u8, slice, '\n') != null) continue;
+
+                out.append(self.alloc, .{
+                    .name = self.alloc.dupe(u8, n) catch return null,
+                    .preview = self.alloc.dupe(u8, slice) catch return null,
+                }) catch return null;
+            } else {
+                const idx = implicit_idx;
+                implicit_idx += 1;
+                const span = entry.value.span;
+
+                if (span.end > self.text.len or span.start > span.end) continue;
+                const slice = self.text[span.start..span.end];
+                if (slice.len == 0 or std.mem.indexOfScalar(u8, slice, '\n') != null) continue;
+
+                out.append(self.alloc, .{
+                    .name = std.fmt.allocPrint(self.alloc, "{d}", .{idx}) catch return null,
+                    .preview = self.alloc.dupe(u8, slice) catch return null,
+                }) catch return null;
+            }
         }
         if (out.items.len == 0) return null;
         return out.toOwnedSlice(self.alloc) catch null;
@@ -2558,12 +2586,15 @@ const SymbolVisitor = struct {
         var q = node.span.start;
         while (q < node.span.end and self.text[q] != '\'' and self.text[q] != '"') q += 1;
         const start = q + 1;
+
         if (q >= node.span.end or start + name.len > node.span.end) return node.span;
         if (!std.mem.eql(u8, self.text[start .. start + name.len], name)) return node.span;
         if (start + name.len < node.span.end and isWordChar(self.text[start + name.len])) return node.span;
+
         var line = node.span.line;
         var column = node.span.column;
         var i = node.span.start;
+
         while (i < start) : (i += 1) {
             if (self.text[i] == '\n') {
                 line += 1;

@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - open subtyping: extra fields are ok, missing or mistyped fields are compile errors
   - field access on a structurally typed table infers the field's type
   - tracks both array and hash entries
+  - positional array entries: `{num, num}` matches `{1, 2}`,
+    mixed with named fields as `{num, num, name: string}`
 
   ```ruby
   fn greet(u: { name: string }) u.name

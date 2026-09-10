@@ -1151,6 +1151,39 @@ test "record rejects array literal" {
     , .ParseError);
 }
 
+test "positional record accepts matching literal" {
+    try t.topNumber(
+        \\ let t0: {number, number} = {1, 2}
+        \\ 1
+    , 1);
+}
+
+test "positional record rejects wrong field type" {
+    try t.expectCompileError(
+        \\ let a: {number, string} = {1, 2}
+    , .ParseError);
+}
+
+test "mixed record accepts matching literal" {
+    try t.topString(
+        \\ let t1: {number, number, name: string} = {1, 2, name = "me"}
+        \\ t1.name
+    , "me");
+}
+
+test "mixed record rejects missing named field" {
+    try t.expectCompileError(
+        \\ let t1: {number, number, name: string} = {1, 2}
+    , .ParseError);
+}
+
+test "positional atom record accepts literal and any atom" {
+    try t.topAtom(
+        \\ let tb: {number, number, :err, atom} = {1, 2, :err, :NotFound}
+        \\ :NotFound
+    , "NotFound");
+}
+
 test "fn alias enforces arity at call sites" {
     try t.expectCompileError(
         \\ type F = fn(num, num) -> num

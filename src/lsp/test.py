@@ -1191,6 +1191,91 @@ async def test_local_table_completion(client: LanguageClient):
 
 
 @pytest.mark.asyncio(loop_scope="module")
+async def test_table_method_hover(client: LanguageClient):
+    """hover over a table with methods shows the method type"""
+    uri = "file:///test/method_hover.rv"
+    client.text_document_did_open(
+        params=DidOpenTextDocumentParams(
+            text_document=TextDocumentItem(
+                uri=uri, language_id="revo", version=1,
+                text='let t = { name = "me", fn getName(self) self.name }\nt',
+            )
+        )
+    )
+    await client.wait_for_notification("textDocument/publishDiagnostics")
+    result = await client.text_document_hover_async(
+        params=HoverParams(
+            position=Position(line=1, character=0),
+            text_document=TextDocumentIdentifier(uri=uri),
+        )
+    )
+    assert result is not None, "hover returned None"
+    value = result.contents.value
+    print("  method hover:", repr(value))
+    assert "getName" in value, f"expected 'getName' in hover, got: {value}"
+    assert "fn" in value, f"expected fn type in hover, got: {value}"
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_implicit_table_hover(client: LanguageClient):
+    """hover over a table with implicit entries shows array fields"""
+    uri = "file:///test/implicit_hover.rv"
+    client.text_document_did_open(
+        params=DidOpenTextDocumentParams(
+            text_document=TextDocumentItem(
+                uri=uri, language_id="revo", version=1,
+                text='let t = { 1, 2 }\nt',
+            )
+        )
+    )
+    await client.wait_for_notification("textDocument/publishDiagnostics")
+    result = await client.text_document_hover_async(
+        params=HoverParams(
+            position=Position(line=1, character=0),
+            text_document=TextDocumentIdentifier(uri=uri),
+        )
+    )
+    assert result is not None, "hover returned None"
+    value = result.contents.value
+    print("  implicit hover:", repr(value))
+    assert "number = 1" in value, f"expected 'number = 1' in hover, got: {
+        value}"
+    assert "number = 2" in value, f"expected 'number = 2' in hover, got: {
+        value}"
+    assert "number" in value, f"expected 'number' type in hover, got: {value}"
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_mixed_table_hover(client: LanguageClient):
+    """hover over a table with both implicit and explicit entries"""
+    uri = "file:///test/mixed_hover.rv"
+    client.text_document_did_open(
+        params=DidOpenTextDocumentParams(
+            text_document=TextDocumentItem(
+                uri=uri, language_id="revo", version=1,
+                text='let t = { 1, 2, name = "me" }\nt',
+            )
+        )
+    )
+    await client.wait_for_notification("textDocument/publishDiagnostics")
+    result = await client.text_document_hover_async(
+        params=HoverParams(
+            position=Position(line=1, character=0),
+            text_document=TextDocumentIdentifier(uri=uri),
+        )
+    )
+    assert result is not None, "hover returned None"
+    value = result.contents.value
+    print("  mixed hover:", repr(value))
+    assert "number = 1" in value, f"expected 'number = 1' in hover, got: {
+        value}"
+    assert "number = 2" in value, f"expected 'number = 2' in hover, got: {
+        value}"
+    assert 'name: string = "me"' in value, f"expected 'name: string = \"me\"' in hover, got: {
+        value}"
+
+
+@pytest.mark.asyncio(loop_scope="module")
 async def test_import_hover_module_name(client: LanguageClient):
     """hover over `one` (the module name) should show module info with exports"""
     with tempfile.TemporaryDirectory() as tmpdir:
