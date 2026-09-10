@@ -401,6 +401,7 @@ type expression syntax:
 | `int \| string` | union type |
 | `(int, string)` | tuple type |
 | `fn(int) -> bool` | function signature |
+| `fn(?a: int) -> bool` | function signature with optional param |
 | `table<int>` | table with value type `int` |
 | `table<string, int>` | table with key `string`, value `int` |
 | `{ name: string }` | table with field `name: string` (extra fields ok) |

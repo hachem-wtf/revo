@@ -974,7 +974,7 @@ const SemanticChecker = struct {
                     .name = field.name,
                     .type_name = if (field.type_name) |tn| switch (tn.kind) {
                         .named => |n| n,
-                        else => try types_mod.typeName(field_type, self.alloc),
+                        else => try type_serde.formatTypeOpts(self.alloc, field_type, .{ .short = true }),
                     } else null,
                     .field_type = field_type,
                 });
