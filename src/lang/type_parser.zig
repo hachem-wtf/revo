@@ -116,15 +116,16 @@ const Parser = struct {
     }
 
     /// atomic type expression with no union operators
-    /// * ident (name):      "number", "string", "MyStruct"
-    /// * a.T (qualified):   module a's alias T
-    /// * ident? (optional): "number?" -> union_of(named("number"), atom(":nil"))
-    /// * ident<T>:          "table<int>", "table<string, int>"
-    /// * :atom (hash):      ":nil", ":ok", ":err"
-    /// * fn(T) -> U:        "fn(int) -> bool"
-    /// * (T):               "(int | string)" (paren grouping), "(int, string)" (tuple)
-    /// * {f: T, ...}:       "{ name: string, age: num }" (structural table)
-    /// * !T / ?T:           "!int", "?int" (error union - prefix bang or kw_not)
+    /// ~ ident (name):      "number", "string", "MyStruct"
+    /// ~ a.T (qualified):   module a's alias T
+    /// ~ ident? (optional): "number?" -> union_of(named("number"), atom(":nil"))
+    /// ~ ident<T>:          "table<int>", "table<string, int>"
+    /// ~ :atom (hash):      ":nil", ":ok", ":err"
+    /// ~ fn(T) -> U:        "fn(int) -> bool"
+    /// ~ (T):               "(int | string)" (paren grouping), "(int, string)" (tuple)
+    /// ~ {f: T, ...}:       "{ name: string, age: num }" (structural table)
+    /// ~ {T, f: U, ...}:    "{ number, number, name: string }" (positional array entries)
+    /// ~ !T / ?T:           "!int", "?int" (error union - prefix bang or kw_not)
     fn parseAtom(self: *Parser) !*ast.TypeExpr {
         const tok = self.peek();
         switch (tok.type) {
@@ -201,15 +202,30 @@ const Parser = struct {
                 const start = self.advance();
                 var fields = try std.ArrayList(ast.RecordField).initCapacity(self.alloc, 4);
                 errdefer fields.deinit(self.alloc);
+                var pos_idx: u32 = 0;
 
                 while (!self.check(.rsquiggly) and !self.check(.eof)) {
-                    // field names may be contextual kws (`type`, `end`)
-                    const name = self.peek();
-                    if (name.type != .ident and !std.mem.startsWith(u8, @tagName(name.type), "kw_"))
-                        return error.UnexpectedToken;
-                    self.pos.* += 1;
-                    _ = try self.expect(.colon);
-                    try fields.append(self.alloc, .{ .name = name.text, .type_expr = try self.parseExpr() });
+                    // `name:` prefix means a named field, anything else is a
+                    // positional array entry (`{ number, number }`); field
+                    // names may be contextual kws (`type`, `end`)
+                    const cur = self.peek();
+                    const is_named = (cur.type == .ident or std.mem.startsWith(u8, @tagName(cur.type), "kw_")) and blk: {
+                        var i = self.pos.* + 1;
+                        while (i < self.tokens.len and self.tokens[i].type == .comment) : (i += 1) {}
+                        break :blk i < self.tokens.len and self.tokens[i].type == .colon;
+                    };
+
+                    if (is_named) {
+                        self.pos.* += 1;
+                        _ = try self.expect(.colon);
+                        try fields.append(self.alloc, .{ .name = cur.text, .type_expr = try self.parseExpr() });
+                    } else {
+                        const te = try self.parseExpr();
+                        const idx_name = try std.fmt.allocPrint(self.alloc, "{d}", .{pos_idx});
+                        pos_idx += 1;
+                        try fields.append(self.alloc, .{ .name = idx_name, .type_expr = te });
+                    }
+
                     if (!self.match(.comma)) break;
                 }
                 _ = try self.expect(.rsquiggly);
@@ -557,4 +573,16 @@ fn moduleExportInto(mctx: *ModuleCtx, node: *const ast.Node, out: *std.ArrayList
         }),
         else => {},
     }
+}
+
+test "pos record roundtrips w/o numeric names" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const mixed = try parseTypeString(BareCtx{ .alloc = alloc }, "{number, number, name: string}");
+    try std.testing.expectEqualStrings("{number, number, name: string}", try mixed.formatType(alloc));
+
+    const atoms = try parseTypeString(BareCtx{ .alloc = alloc }, "{number, :err, atom}");
+    try std.testing.expectEqualStrings("{number, :err, atom}", try atoms.formatType(alloc));
 }

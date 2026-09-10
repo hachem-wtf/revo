@@ -168,8 +168,15 @@ pub const TypeExpr = struct {
                 try writer.writeByte('{');
                 for (fields, 0..) |f, i| {
                     if (i > 0) try writer.writeAll(", ");
-                    try writer.writeAll(f.name);
-                    try writer.writeAll(": ");
+                    // numeric names are positional array entries (`{ number, number }`)
+                    const positional = f.name.len > 0 and blk: {
+                        for (f.name) |c| if (!std.ascii.isDigit(c)) break :blk false;
+                        break :blk true;
+                    };
+                    if (!positional) {
+                        try writer.writeAll(f.name);
+                        try writer.writeAll(": ");
+                    }
                     try f.type_expr.printAt(writer, null);
                 }
                 try writer.writeByte('}');

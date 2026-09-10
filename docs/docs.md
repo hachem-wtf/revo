@@ -371,6 +371,16 @@ let u: { name: string, age: int } = { name = "alice" }
 # error: missing field `age`
 ```
 
+array entries are positional, just the type:
+
+```revo
+let t0: {number, number} = {1, 2}
+
+let t1: {number, number, name: string} = {1, 2, name = "me"}
+# error: missing field `name`
+let bad: {number, number, name: string} = {1, 2}
+```
+
 ## type aliases
 
 `type` creates a local name for a type expression:
@@ -394,6 +404,8 @@ type expression syntax:
 | `table<int>` | table with value type `int` |
 | `table<string, int>` | table with key `string`, value `int` |
 | `{ name: string }` | table with field `name: string` (extra fields ok) |
+| `{ number, number }` | table with two array entries (extra fields ok) |
+| `{ number, name: string }` | mixed array and named fields |
 | `!int` | `:ok(int) \| :err(any)` (error union sugar) |
 
 type names cannot be used as values at runtime:
