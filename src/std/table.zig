@@ -1,5 +1,3 @@
-const Ts = root.T;
-
 pub const Impl = struct {
     pub fn rawget(vm: *VM, self: Ts.table, key: Ts.any) !HostResult {
         const t = try vm.tables.get(@intFromEnum(self));
@@ -31,8 +29,16 @@ pub const Impl = struct {
     }
 
     pub fn insert(vm: *VM, self: Ts.table, pos_num: Ts.number, val: Ts.any) !HostResult {
-        const table = vm.tables.get(@intFromEnum(self)) catch return .errType(0, "table", typeof(Data.new.table(@intFromEnum(self)), vm));
-        const pos: i64 = root.numToInt(i64, pos_num) orelse return .errType(1, "integer num", typeof(Data.new.num(pos_num), vm));
+        const table = vm.tables.get(@intFromEnum(self)) catch return .errType(
+            0,
+            "table",
+            typeof(Data.new.table(@intFromEnum(self)), vm),
+        );
+        const pos: i64 = root.numToInt(i64, pos_num) orelse return .errType(
+            1,
+            "integer num",
+            typeof(Data.new.num(pos_num), vm),
+        );
 
         if (pos < 0) return .errType(1, "non-negative num", typeof(Data.new.num(pos_num), vm));
         const pos_usize: usize = @intCast(pos);
@@ -46,7 +52,11 @@ pub const Impl = struct {
     }
 
     pub fn pop(vm: *VM, self: Ts.table) !HostResult {
-        const table = vm.tables.get(@intFromEnum(self)) catch return .errType(0, "table", typeof(Data.new.table(@intFromEnum(self)), vm));
+        const table = vm.tables.get(@intFromEnum(self)) catch return .errType(
+            0,
+            "table",
+            typeof(Data.new.table(@intFromEnum(self)), vm),
+        );
         if (table.array.items.len == 0) return .data(Data.new.nil());
 
         const removed = table.array.orderedRemove(table.array.items.len - 1);
@@ -54,7 +64,11 @@ pub const Impl = struct {
     }
 
     pub fn remove(vm: *VM, self: Ts.table, key: Ts.any) !HostResult {
-        const table = vm.tables.get(@intFromEnum(self)) catch return .errType(0, "table", typeof(Data.new.table(@intFromEnum(self)), vm));
+        const table = vm.tables.get(@intFromEnum(self)) catch return .errType(
+            0,
+            "table",
+            typeof(Data.new.table(@intFromEnum(self)), vm),
+        );
         const removed = table.removeAndReturn(key, vm) orelse return .other("not found");
         return .data(removed);
     }
@@ -64,10 +78,12 @@ pub const Impl = struct {
         const delim_str = vm.stringValue(@intFromEnum(delim));
         var buf = std.Io.Writer.Allocating.init(vm.runtime.alloc);
         defer buf.deinit();
+
         for (table.array.items, 0..) |item, idx| {
             if (idx > 0) try buf.writer.writeAll(delim_str);
             try item.write(&buf.writer, vm, .display);
         }
+
         const slice = try buf.toOwnedSlice();
         return .data(try vm.adoptDataString(slice));
     }
@@ -76,18 +92,22 @@ pub const Impl = struct {
         const table = try vm.tables.get(@intFromEnum(self));
         var keys_list = try std.ArrayList(Data).initCapacity(vm.runtime.alloc, table.array.items.len + 10);
         defer keys_list.deinit(vm.runtime.alloc);
+
         for (0..table.array.items.len) |idx| {
             try keys_list.append(vm.runtime.alloc, Data.new.num(idx));
         }
+
         var hash_it = table.hash.orderedIterator();
         while (hash_it.next()) |entry| {
             try keys_list.append(vm.runtime.alloc, entry.key);
         }
+
         const result_table = try vm.tables.create();
         const result = try vm.tables.get(result_table);
         for (keys_list.items, 0..) |key, idx| {
             try result.putRaw(Data.new.num(idx), key, vm);
         }
+
         return .data(Data.new.table(result_table));
     }
 
@@ -97,15 +117,18 @@ pub const Impl = struct {
         defer values_list.deinit(vm.runtime.alloc);
         for (table.array.items) |val|
             try values_list.append(vm.runtime.alloc, val);
+
         var hash_it = table.hash.orderedIterator();
         while (hash_it.next()) |entry| {
             try values_list.append(vm.runtime.alloc, entry.val);
         }
+
         const result_table = try vm.tables.create();
         const result = try vm.tables.get(result_table);
         for (values_list.items, 0..) |val, idx| {
             try result.putRaw(Data.new.num(idx), val, vm);
         }
+
         return .data(Data.new.table(result_table));
     }
 
@@ -134,16 +157,20 @@ pub const Impl = struct {
         const t2 = try vm.tables.get(@intFromEnum(other));
         const result_table = try vm.tables.create();
         const result = try vm.tables.get(result_table);
+
         try result.array.appendSlice(vm.runtime.alloc, t1.array.items);
         try result.array.appendSlice(vm.runtime.alloc, t2.array.items);
         var hash_it1 = t1.hash.orderedIterator();
+
         while (hash_it1.next()) |entry| {
             try result.putRaw(entry.key, entry.val, vm);
         }
+
         var hash_it2 = t2.hash.orderedIterator();
         while (hash_it2.next()) |entry| {
             try result.putRaw(entry.key, entry.val, vm);
         }
+
         return .data(Data.new.table(result_table));
     }
 
@@ -151,24 +178,11 @@ pub const Impl = struct {
         const tbl = try vm.tables.get(@intFromEnum(self));
         const Context = struct {
             vm_: *VM,
-            pub fn compare(ctx: @This(), a: Data, b: Data) bool {
-                if (a.asNum()) |an| {
-                    if (b.asNum()) |bn| return an < bn;
-                    return true;
-                }
-                if (a.asString()) |as| {
-                    if (b.asString()) |bs| {
-                        const astr = ctx.vm_.stringValue(as);
-                        const bstr = ctx.vm_.stringValue(bs);
-                        return std.mem.order(u8, astr, bstr) == .lt;
-                    }
-                    if (b.isNumber()) return false;
-                    return true;
-                }
-                return false;
+            pub fn lessThanFn(ctx: @This(), lhs: Data, rhs: Data) bool {
+                return ctx.vm_.compare(lhs, rhs) == .lt;
             }
         };
-        std.mem.sort(Data, tbl.array.items, Context{ .vm_ = vm }, Context.compare);
+        std.mem.sort(Data, tbl.array.items, Context{ .vm_ = vm }, Context.lessThanFn);
         return .data(Data.new.table(@intFromEnum(self)));
     }
 
@@ -182,19 +196,26 @@ pub const Impl = struct {
                 return !revo.isFalse(result);
             }
         };
-        std.mem.sort(Data, tbl.array.items, Context{ .vm_ = vm, .fn_data = Data.new.function(@intFromEnum(compare_fn)) }, Context.compare);
+        std.mem.sort(
+            Data,
+            tbl.array.items,
+            Context{ .vm_ = vm, .fn_data = Data.new.function(@intFromEnum(compare_fn)) },
+            Context.compare,
+        );
         return .data(Data.new.table(@intFromEnum(self)));
     }
 
     pub fn first(vm: *VM, self: Ts.table) !HostResult {
         const tbl = try vm.tables.get(@intFromEnum(self));
-        if (tbl.array.items.len == 0) return .data(revo.Data.new.core(.nil));
+        if (tbl.array.items.len == 0)
+            return .data(revo.Data.new.core(.nil));
         return .data(tbl.array.items[0]);
     }
 
     pub fn last(vm: *VM, self: Ts.table) !HostResult {
         const tbl = try vm.tables.get(@intFromEnum(self));
-        if (tbl.array.items.len == 0) return .data(revo.Data.new.core(.nil));
+        if (tbl.array.items.len == 0)
+            return .data(revo.Data.new.core(.nil));
         return .data(tbl.array.items[tbl.array.items.len - 1]);
     }
 
@@ -208,6 +229,7 @@ pub const Impl = struct {
         const src = try vm.tables.get(@intFromEnum(self));
         const result_id = try vm.tables.create();
         const result = try vm.tables.get(result_id);
+
         for (src.array.items) |item| {
             if (item.asTable()) |nested_id| {
                 const nested = try vm.tables.get(nested_id);
@@ -218,23 +240,14 @@ pub const Impl = struct {
                 try result.array.append(vm.runtime.alloc, item);
             }
         }
-        return .data(Data.new.table(result_id));
-    }
 
-    pub fn index_of(vm: *VM, self: Ts.table, search_val: Ts.any) !HostResult {
-        const tbl = try vm.tables.get(@intFromEnum(self));
-        for (tbl.array.items, 0..) |item, i| {
-            if (dataEq(item, search_val, vm)) {
-                return .data(Data.new.num(i));
-            }
-        }
-        return .coreAtom(.nil);
+        return .data(Data.new.table(result_id));
     }
 
     pub fn @"contains?"(vm: *VM, self: Ts.table, search_val: Ts.any) !HostResult {
         const tbl = try vm.tables.get(@intFromEnum(self));
         for (tbl.array.items) |item| {
-            if (dataEq(item, search_val, vm)) {
+            if (vm.compare(item, search_val) == .eq) {
                 return ._bool(true);
             }
         }
@@ -248,7 +261,7 @@ pub const Impl = struct {
         for (src.array.items) |item| {
             var found = false;
             for (result.array.items) |res| {
-                if (dataEq(item, res, vm)) {
+                if (vm.compare(item, res) == .eq) {
                     found = true;
                     break;
                 }
@@ -268,24 +281,53 @@ pub const Impl = struct {
     pub fn add(vm: *VM, self: Ts.table, other: Ts.table) !HostResult {
         const left = try vm.tables.get(@intFromEnum(self));
         const right = try vm.tables.get(@intFromEnum(other));
+
         const result_id = try vm.tables.create();
         const result = try vm.tables.get(result_id);
+
         try result.array.appendSlice(vm.runtime.alloc, left.array.items);
         try result.array.appendSlice(vm.runtime.alloc, right.array.items);
+
         return .data(Data.new.table(result_id));
     }
 
     pub fn repeat(vm: *VM, self: Ts.table, n: Ts.number) !HostResult {
         const times: i64 = root.numToInt(i64, n) orelse return .errType(1, "integer num", typeof(Data.new.num(n), vm));
         if (times < 0) return .errType(1, "non-negative num", "negative num");
+
         const count: usize = @intCast(times);
         const left = try vm.tables.get(@intFromEnum(self));
+
         const result_id = try vm.tables.create();
         const result = try vm.tables.get(result_id);
+
         for (0..count) |_| {
             try result.array.appendSlice(vm.runtime.alloc, left.array.items);
         }
         return .data(Data.new.table(result_id));
+    }
+
+    // in loving memory of tuple:count_of()
+    pub fn count_of(vm: *VM, self: Ts.table, search_val: Ts.any) !HostResult {
+        const table = try vm.tables.get(@intFromEnum(self));
+        var counter: i16 = 0;
+
+        for (table.array.items) |item| {
+            if (vm.compare(item, search_val) == .eq) {
+                counter += 1;
+            }
+        }
+        return .data(Data.new.num(counter));
+    }
+
+    pub fn index_of(vm: *VM, self: Ts.table, search_val: Ts.any) !HostResult {
+        const tbl = try vm.tables.get(@intFromEnum(self));
+        for (tbl.array.items, 0..) |item, i| {
+            if (vm.compare(item, search_val) == .eq) {
+                return .data(Data.new.num(i));
+            }
+        }
+        return .coreAtom(.nil);
     }
 };
 
@@ -300,13 +342,6 @@ fn push(args: []const Data, vm: *VM) !HostResult {
     const table = vm.tables.get(table_id) catch return .errType(0, "table", typeof(args[0], vm));
     try table.array.appendSlice(vm.runtime.alloc, args[1..]);
     return .data(Data.new.table(table_id));
-}
-
-fn dataEq(a: Data, b: Data, vm: *VM) bool {
-    if (a.asNum()) |an| return if (b.asNum()) |bn| an == bn else false;
-    if (a.asString()) |as| return if (b.asString()) |bs| std.mem.eql(u8, vm.stringValue(as), vm.stringValue(bs)) else false;
-    if (a.asAtom()) |aa| return if (b.asAtom()) |ba| aa == ba else false;
-    return false;
 }
 
 test "table library" {
@@ -337,6 +372,22 @@ test "contains? and index_of compare string content, not ids" {
     , 1);
 }
 
+test "get count of a value" {
+    try testing.topNumber("{1, 2}:count_of(1)", 1);
+    try testing.topNumber("{1, 2, 'hello'}:count_of('hello')", 1);
+    try testing.topNumber("{:true, :false, 'hello', 1, 2, {1, 'hello' = 2}}:count_of(:true)", 1);
+}
+
+test "get index of a value" {
+    try testing.topNumber("{1, 2}:index_of(1)", 0);
+    try testing.topNumber("{1, 2, 'hello'}:index_of('hello')", 2);
+    try testing.topNumber("{:true, :false, 'hello', 1, 2, {1, 'hello' = 2}}:index_of({1, 'hello' = 2})", 5);
+    try testing.topAtom(
+        "{:true, :false, 'hello', 1, 2, {1, 'hello' = 2}}:index_of(3)",
+        "nil",
+    );
+}
+
 const std = @import("std");
 
 const revo = @import("../root.zig");
@@ -347,3 +398,4 @@ const api = @import("api.zig");
 const root = @import("root.zig");
 const HostResult = root.HostResult;
 const typeof = root.typeof;
+const Ts = root.T;

@@ -19,10 +19,3 @@ pub declare tuple.mul = fn(self: tuple, n: num) -> tuple
 
 #* repeats tuple n times *#
 pub declare tuple.repeat = fn(self: tuple, n: num) -> tuple
-
-#* returns the number of times a specified value appears in a tuple *#
-pub declare tuple.count_of = fn(self: tuple, search_val: any) -> num
-
-#* returns the index of a specified value's first occurrence, or :nil if not found *#
-pub declare tuple.index_of = fn(self: tuple, search_val: any) -> num|:nil
-

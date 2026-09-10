@@ -71,8 +71,17 @@ pub declare table.reverse = fn(self: table) -> table
 #* flattens nested tables into single array *#
 pub declare table.flatten = fn(self: table) -> table
 
-#* ret 0-based index of value or nil if not found *#
-pub declare table.index_of = fn(self: table, value: any) -> num|:nil
+#*
+	ret 0-based index of value or nil if not found
+	TODO: same for hash part
+*#
+pub declare table.index_of = fn(self: {}, value: any) -> num|:nil
+
+#*
+	returns the number of times a specified value appears in a table's array part
+	TODO: same for hash part
+*#
+pub declare table.count_of = fn(self: {}, search_val: any) -> num
 
 #* checks if table contains value *#
 pub declare table.contains? = fn(self: table, value: any) -> bool
