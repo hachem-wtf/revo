@@ -2,15 +2,16 @@ pub fn runReport(self: *VM) !@TypeOf(self.*).EvalResult {
     self.clearPanicMessage();
     self.clearRuntimeMessage();
 
-    const fiber = self.mainFiber();
+    const fid = self.sched.current_fiber;
+    const fiber = self.currentFiber();
     if (fiber.frames.items.len == 0) {
         try self.pushRootFrame(fiber, 16);
         fiber.registers_len = 16;
         @memset(fiber.registers[0..16], revo.Data.new.core(.missing));
     }
 
-    self.sched.setFiberState(0, .ready);
-    try self.sched.enqueueRunnable(0);
+    self.sched.setFiberState(fid, .ready);
+    try self.sched.enqueueRunnable(fid);
 
     while (true) {
         if (try runReadyFibers(self)) |failure| {

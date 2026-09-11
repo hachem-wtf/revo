@@ -41,13 +41,16 @@ fn swapFiberAndRun(
     var fiber = try revo.VM.Fiber.init(vm.runtime.alloc, vm.currentFiber().id, program, revo.VM.INIT_REG_COUNT);
     fiber.debug_info_id = vm.pending_debug_info_id;
 
+    const outer_idx = vm.sched.current_fiber;
     const prev = vm.swapFiber(fiber);
     errdefer {
+        vm.sched.current_fiber = outer_idx;
         var finished = vm.swapFiber(prev);
         vm.closeUpvalueList(&finished, 0) catch {};
         revo.VM.Fiber.deinit(&finished, vm.runtime.alloc);
     }
     const result = try revo.vm.exec.runReport(vm);
+    vm.sched.current_fiber = outer_idx;
     return .{ .result = result, .prev = prev };
 }
 
