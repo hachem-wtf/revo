@@ -295,6 +295,7 @@ pub const Expr = union(enum) {
     table_pattern: []*Node,
 
     table: []TableEntry,
+    ascribed: struct { expr: *Node, type_name: *TypeExpr },
     proc_macro: struct { name: []const u8, param: FnParam, body: *Node },
     quasiquote: Quasiquote,
     try_expr: *Node, // expr?
@@ -645,6 +646,14 @@ pub const Node = struct {
             .tuple => |items| try printNodeList(writer, "tuple", items, depth),
             .tuple_pattern => |items| try printNodeList(writer, "tuple-pattern", items, depth),
             .table_pattern => |items| try printNodeList(writer, "table-pattern", items, depth),
+            .ascribed => |a| {
+                try writer.writeAll("(ascribed");
+                try sep(writer, depth, 1);
+                try a.expr.printAt(writer, child(depth));
+                try sep(writer, depth, 1);
+                try type_serde.printTypeExpr(a.type_name, writer);
+                try close(writer, depth);
+            },
             .table => |entries| {
                 if (entries.len == 0) {
                     try writer.writeAll("(table)");
@@ -1270,6 +1279,10 @@ pub fn walkExpr(
         .table_pattern => |items| allocNode(allocator, expr.span, .{
             .table_pattern = try walkSliceWith(allocator, items, Transform, ctx),
         }),
+        .ascribed => |a| allocNode(allocator, expr.span, .{ .ascribed = .{
+            .expr = try ctx.walk(allocator, a.expr, ctx),
+            .type_name = a.type_name,
+        } }),
         .block => |items| {
             const n = try allocNode(allocator, expr.span, .{
                 .block = try walkSliceWith(allocator, items, Transform, ctx),

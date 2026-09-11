@@ -1,5 +1,0 @@
-type x = {}
-let a: uri.Hi = 2 # ok
-let b: x = 2 # error
-
-ok?!(())

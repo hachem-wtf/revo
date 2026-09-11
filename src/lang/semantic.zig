@@ -884,6 +884,15 @@ const SemanticChecker = struct {
                 break :blk .{ .tag = .any };
             },
             .number, .string, .multiline_string, .hash, .nil, .tuple, .table, .tuple_pattern, .table_pattern, .quasiquote, .test_block, .test_suite, .proc_macro => types_mod.inferExprType(self, node),
+            .ascribed => blk: {
+                try self.appendError(
+                    "type ascriptions only go in match patterns",
+                    node.span,
+                    "not a value",
+                );
+
+                break :blk .{ .tag = .any };
+            },
         };
     }
 
@@ -1107,8 +1116,18 @@ const SemanticChecker = struct {
                     _ = try self.declarePatternNames(item);
                 }
             },
+            .ascribed => |a| {
+                const inner_ti = type_serde.evalTypeExpr(self, a.type_name) catch types_mod.TypeInfo{ .tag = .any };
+
+                if (a.expr.expr == .ident and !ast.isDiscardName(a.expr.expr.ident)) {
+                    try self.declare(a.expr.expr.ident, inner_ti, null);
+                } else {
+                    _ = try self.declarePatternNames(a.expr);
+                }
+            },
             else => {},
         }
+
         return .{ .tag = .any };
     }
 
@@ -1116,6 +1135,21 @@ const SemanticChecker = struct {
     /// `(:ok, v)` and `{:ok, v}` patterns against `(:ok, int) | (:err, string)`
     /// (or the table-union spelling) bind `v` as `.int`, not `.any`
     fn narrowPatternNames(self: *SemanticChecker, pattern: *const ast.Node, subject_type: types_mod.TypeInfo) !void {
+        // ascriptions apply regardless of subject type
+        //   ; and win over union narrowing
+        if (pattern.expr == .ascribed) {
+            const a = pattern.expr.ascribed;
+            const inner_ti = type_serde.evalTypeExpr(self, a.type_name) catch types_mod.TypeInfo{ .tag = .any };
+
+            if (a.expr.expr == .ident and !ast.isDiscardName(a.expr.expr.ident)) {
+                try self.declare(a.expr.expr.ident, inner_ti, null);
+
+                return;
+            }
+
+            return try self.narrowPatternNames(a.expr, subject_type);
+        }
+
         if (subject_type.tag == .any) return;
 
         const items = switch (pattern.expr) {

@@ -792,8 +792,12 @@ fn parseMatchArm(self: *Parser) anyerror!ast.MatchArm {
             _ = self.advance();
             try matchers.append(self.alloc, .wildcard);
         } else {
+            var m = try self.parseScoped(null, false, 25);
+            // not for tuple patterns
+            if (m.expr != .tuple and self.check(.colon)) m = try self.parseAscribed(m);
+
             try matchers.append(self.alloc, .{
-                .expr = try self.exprToPattern(try self.parseScoped(null, false, 25)),
+                .expr = try self.exprToPattern(m),
             });
         }
         if (!self.match(.comma)) break;
@@ -1400,6 +1404,11 @@ fn parseTable(self: *Parser, start: Token) anyerror!*Node {
             const keyed_value = try self.parseExpression(0);
             end_span = keyed_value.span;
             try entries.append(self.alloc, .{ .key = first, .value = keyed_value });
+        } else if (self.check(.colon)) {
+            const asc = try self.parseAscribed(first);
+            end_span = asc.span;
+
+            try entries.append(self.alloc, .{ .key = null, .value = asc });
         } else {
             end_span = first.span;
             try entries.append(self.alloc, .{ .key = null, .value = first });
@@ -1464,6 +1473,18 @@ fn parseParenExpr(self: *Parser, start: Token) anyerror!*Node {
     return self.allocExpr(Span.merge(start.span(), close.span()), .{ .tuple = try items.toOwnedSlice(self.alloc) });
 }
 
+/// `expr: Type` ascription, only legal in match patterns
+///   ; value positions reject it later with a proper error
+fn parseAscribed(self: *Parser, first: *Node) anyerror!*Node {
+    _ = try self.expect(.colon);
+    const type_name = try type_serde.parse(self.tokens, &self.pos, self.alloc);
+
+    return self.allocExpr(
+        Span.merge(first.span, type_name.span),
+        .{ .ascribed = .{ .expr = first, .type_name = type_name } },
+    );
+}
+
 /// (a, b, c) in pattern position, does nested parens n wildcards
 fn parseTuplePattern(self: *Parser, terminator: TokenType) anyerror!*Node {
     var items = try std.ArrayList(*Node).initCapacity(self.alloc, 2);
@@ -1511,6 +1532,11 @@ fn exprToPattern(self: *Parser, expr: *Node) anyerror!*Node {
 
             for (entries) |entry| try out.append(self.alloc, try self.exprToPattern(entry.value));
             break :blk try self.allocExpr(expr.span, .{ .table_pattern = try out.toOwnedSlice(self.alloc) });
+        },
+        .ascribed => |a| blk: {
+            const inner = try self.exprToPattern(a.expr);
+
+            break :blk try self.allocExpr(expr.span, .{ .ascribed = .{ .expr = inner, .type_name = a.type_name } });
         },
         else => expr,
     };

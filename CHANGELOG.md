@@ -56,8 +56,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   # => 42
   ```
 
-  union narrowing works too: `{:ok, v}` against
+  they take `name: Type` ascriptions, checked per-arm:
+
+  ```ruby
+  match {1, "two"}
+  | x: number => x * 2
+  | {x, y: number} => x + y
+  | {x, y} => y
+  # => "two"
+  ```
+
+  the type gets narrowed, so `{:ok, v}` against
   `{:ok, num} | {:err, string}` binds `v: num`
+
+  everything takes them
+  tuple patterns dont do it, they are gonna be gone soon
 
 - std:
   - `hash(any) -> num`

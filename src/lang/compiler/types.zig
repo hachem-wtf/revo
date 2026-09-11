@@ -655,7 +655,7 @@ pub fn inferExprType(ctx: anytype, node: *const ast.Node) TypeInfo {
         .import_stmt, .test_block, .test_suite, .macro_expr, .proc_macro, .quasiquote => .{ .tag = .any },
         .match_expr => |v| inferMatchType(ctx, v.subject, v.arms),
         .range_literal, .slice_literal => .{ .tag = .number },
-        .assign_expr, .decl, .binding, .tuple_pattern, .table_pattern, .type_alias => .{ .tag = .any },
+        .assign_expr, .decl, .binding, .tuple_pattern, .table_pattern, .ascribed, .type_alias => .{ .tag = .any },
     };
 }
 
@@ -2002,6 +2002,31 @@ test "match narrowing enables specialized add_int from table union payload" {
         \\ match x
         \\ | {:ok, v} => v + 1
         \\ | {:err, _} => 0
+        ,
+    }, .{});
+    try std.testing.expect(built == .ok);
+    defer vm.runtime.alloc.free(built.ok.instructions);
+    defer vm.runtime.alloc.free(built.ok.spans);
+
+    var saw_add_int = false;
+    for (built.ok.instructions) |inst| {
+        if (inst.op == .add_int or inst.op == .add_int_imm) saw_add_int = true;
+    }
+    try std.testing.expect(saw_add_int);
+}
+
+test "match ascriptions narrow to the annotated type" {
+    // `v: num` narrows even with an `any` subject
+    //   ; so `v + 1` emits add_int
+    var vm = try VM.init(testRuntime());
+    defer vm.deinit();
+
+    const built = try lang.build(&vm, .{
+        .text =
+        \\ let x: any = {41}
+        \\ match x
+        \\ | {v: num} => v + 1
+        \\ | _ => 0
         ,
     }, .{});
     try std.testing.expect(built == .ok);

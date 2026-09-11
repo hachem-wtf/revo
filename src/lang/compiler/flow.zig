@@ -504,7 +504,7 @@ pub fn bindMatchPattern(
 
                         state.reserveLocalSlots(self);
                     },
-                    .tuple_pattern, .table_pattern => {
+                    .tuple_pattern, .table_pattern, .ascribed => {
                         try emitStorageLoad(self, subject);
                         if (from_table) {
                             try self.emit(.load_small_int, idx);
@@ -523,6 +523,7 @@ pub fn bindMatchPattern(
                 }
             }
         },
+        .ascribed => |a| try bindMatchPattern(self, a.expr, subject),
         else => {},
     }
 }
@@ -537,6 +538,19 @@ pub fn compilePatternChecks(
 
     switch (expr.expr) {
         .ident => {}, // always matches
+        .ascribed => |a| {
+            // type check first, then the inner pattern
+            //   ; fail fast
+            const asc_ti = type_serde.evalTypeExpr(self, a.type_name) catch types_mod.TypeInfo{ .tag = .any };
+
+            const type_fails = try compileTypeSatisfies(self, subject, asc_ti);
+            defer self.alloc.free(type_fails);
+            try fail_jumps.appendSlice(self.alloc, type_fails);
+
+            const inner_fails = try compilePatternChecks(self, subject, a.expr);
+            defer self.alloc.free(inner_fails);
+            try fail_jumps.appendSlice(self.alloc, inner_fails);
+        },
         .tuple_pattern => |items| {
             // type check, then length, then each element
             try self.emit(.load_global, revo.core_atoms.type.atomId());
@@ -629,6 +643,180 @@ pub fn compilePatternChecks(
             try fail_jumps.append(self.alloc, try self.jump(.jump_if_false));
         },
     }
+    return fail_jumps.toOwnedSlice(self.alloc);
+}
+
+/// `type(x) == :name`
+///   ; fail jump when not
+fn jumpIfNotType(self: *Compiler, subject: VarStorage, name: []const u8) !usize {
+    try self.emit(.load_global, revo.core_atoms.type.atomId());
+    try emitStorageLoad(self, subject);
+    try self.emit(.call, 1);
+    try self.@"const"(Data.new.atom(try self.vm.internAtom(name)));
+    try self.emit(.eq, 0);
+
+    return try self.jump(.jump_if_false);
+}
+
+/// runtime check that the stored value satisfies a type
+///   (`x: T` ascriptions)
+/// ; fail jumps go to the next match arm
+fn compileTypeSatisfies(
+    self: *Compiler,
+    subject: VarStorage,
+    ti: types_mod.TypeInfo,
+) ![]usize {
+    var fail_jumps = try std.ArrayList(usize).initCapacity(self.alloc, 4);
+    errdefer fail_jumps.deinit(self.alloc);
+
+    switch (ti.tag) {
+        .any, .type_var => {},
+        .never => try fail_jumps.append(self.alloc, try self.jump(.jump)),
+        .number => try fail_jumps.append(self.alloc, try jumpIfNotType(self, subject, "number")),
+        .string => try fail_jumps.append(self.alloc, try jumpIfNotType(self, subject, "string")),
+        .function => try fail_jumps.append(self.alloc, try jumpIfNotType(self, subject, "function")),
+        .bool => {
+            // bools are :true/:false atoms
+            try emitStorageLoad(self, subject);
+            try self.@"const"(Data.new.atom(try self.vm.internAtom("true")));
+            try self.emit(.eq, 0);
+            const ok_jump = try self.jump(.jump_if_true);
+
+            try emitStorageLoad(self, subject);
+            try self.@"const"(Data.new.atom(try self.vm.internAtom("false")));
+            try self.emit(.eq, 0);
+            try fail_jumps.append(self.alloc, try self.jump(.jump_if_false));
+
+            self.patchJump(ok_jump);
+        },
+        .atom => |name| {
+            if (name.len == 0) {
+                try fail_jumps.append(self.alloc, try jumpIfNotType(self, subject, "atom"));
+            } else {
+                const base = ast.atomName(name);
+                const want: Data = if (std.mem.eql(u8, base, "nil"))
+                    Data.new.nil()
+                else
+                    Data.new.atom(try self.vm.internAtom(base));
+
+                try emitStorageLoad(self, subject);
+                try self.@"const"(want);
+                try self.emit(.eq, 0);
+                try fail_jumps.append(self.alloc, try self.jump(.jump_if_false));
+            }
+        },
+        // tuples are gone
+        //   ; nothing satisfies a tuple ascription
+        .tuple => try fail_jumps.append(self.alloc, try self.jump(.jump)),
+        .table => |tbl| {
+            try fail_jumps.append(self.alloc, try jumpIfNotType(self, subject, "table"));
+
+            if (tbl.fields) |fields| {
+                var max_pos: usize = 0;
+                var has_pos = false;
+
+                for (fields) |f| {
+                    const idx = std.fmt.parseInt(usize, f.name, 10) catch continue;
+                    has_pos = true;
+                    if (idx + 1 > max_pos) max_pos = idx + 1;
+                }
+
+                // open subtyping like record coercion
+                //   ; extras ok, so at-least
+                if (has_pos) {
+                    try self.emit(.load_stdlib_global, try self.vm.internAtom("table"));
+                    try self.emit(.table_get_atom, try self.vm.internAtom("alen"));
+                    try emitStorageLoad(self, subject);
+                    try self.emit(.call, 1);
+                    try self.@"const"(Data.new.num(max_pos));
+                    try self.emit(.gte, 0);
+                    try fail_jumps.append(self.alloc, try self.jump(.jump_if_false));
+                }
+
+                for (fields) |f| {
+                    const depth_before = self.active_registers;
+                    const slot_before = self.slot_allocators.items[self.slot_allocators.items.len - 1];
+
+                    if (std.fmt.parseInt(usize, f.name, 10)) |idx| {
+                        try emitStorageLoad(self, subject);
+                        try self.emit(.load_small_int, idx);
+                        try self.emit(.table_get, 0);
+
+                        const nested_slot = try state.declareLocal(self, "__match_tmp", false);
+                        state.markLocalInitialized(self, nested_slot);
+                        try self.emit(.bind_local, nested_slot);
+                        state.reserveLocalSlots(self);
+
+                        const nested_fails = try compileTypeSatisfies(self, .{ .local = nested_slot }, f.field_type);
+                        try fail_jumps.appendSlice(self.alloc, nested_fails);
+                        self.alloc.free(nested_fails);
+                    } else |_| {
+                        // named fields must be present
+                        //   ; missing reads as :undef
+                        const key_atom = try self.vm.internAtom(f.name);
+                        try emitStorageLoad(self, subject);
+                        try self.emit(.table_get_atom, key_atom);
+
+                        const nested_slot = try state.declareLocal(self, "__match_tmp", false);
+                        state.markLocalInitialized(self, nested_slot);
+                        try self.emit(.bind_local, nested_slot);
+                        state.reserveLocalSlots(self);
+
+                        const nested_storage: VarStorage = .{ .local = nested_slot };
+                        try emitStorageLoad(self, nested_storage);
+                        try self.@"const"(Data.new.core(.undef));
+                        try self.emit(.eq, 0);
+                        try fail_jumps.append(self.alloc, try self.jump(.jump_if_true));
+
+                        const nested_fails = try compileTypeSatisfies(self, nested_storage, f.field_type);
+                        try fail_jumps.appendSlice(self.alloc, nested_fails);
+                        self.alloc.free(nested_fails);
+                    }
+
+                    self.active_registers = depth_before;
+                    self.slot_allocators.items[self.slot_allocators.items.len - 1] = slot_before;
+                }
+            }
+        },
+        .@"union" => |us| {
+            if (us.len == 0) {
+                try fail_jumps.append(self.alloc, try self.jump(.jump));
+            } else {
+                // try each variant in turn
+                //   ; only the last ones failures escape
+                var ok_jumps = try std.ArrayList(usize).initCapacity(self.alloc, us.len);
+                defer ok_jumps.deinit(self.alloc);
+
+                for (us, 0..) |variant, i| {
+                    var variant_fails = try std.ArrayList(usize).initCapacity(self.alloc, 4);
+                    errdefer variant_fails.deinit(self.alloc);
+
+                    if (variant.types.len == 1) {
+                        const inner = try compileTypeSatisfies(self, subject, variant.types[0]);
+                        try variant_fails.appendSlice(self.alloc, inner);
+                        self.alloc.free(inner);
+                    } else {
+                        // empty and multi-type tuple shapes gont satisfy
+                        try variant_fails.append(self.alloc, try self.jump(.jump));
+                    }
+
+                    if (i + 1 < us.len) {
+                        try ok_jumps.append(self.alloc, try self.jump(.jump));
+                        const next = self.irLen();
+                        for (variant_fails.items) |jump_idx| self.patchJumpToLabel(jump_idx, next);
+                        variant_fails.deinit(self.alloc);
+                    } else {
+                        try fail_jumps.appendSlice(self.alloc, variant_fails.items);
+                        variant_fails.deinit(self.alloc);
+                    }
+                }
+
+                const done = self.irLen();
+                for (ok_jumps.items) |jump_idx| self.patchJumpToLabel(jump_idx, done);
+            }
+        },
+    }
+
     return fail_jumps.toOwnedSlice(self.alloc);
 }
 
@@ -829,6 +1017,7 @@ fn typeNameInfo(name: []const u8) ?types_mod.TypeInfo {
 
 fn patternTypeInfo(self: *Compiler, pattern: *const Node) ?types_mod.TypeInfo {
     return switch (pattern.expr) {
+        .ascribed => |a| type_serde.evalTypeExpr(self, a.type_name) catch null,
         .number => .{ .tag = .number },
         .string, .multiline_string => .{ .tag = .string },
         .hash => |name| .{ .tag = .{ .atom = name } },
@@ -883,12 +1072,39 @@ fn narrowMatchPattern(
     pattern: *const Node,
     subject_type: types_mod.TypeInfo,
 ) !void {
-    if (subject_type.tag != .@"union") return;
+    // ascriptions apply regardless of subject type
+    //   ; and win over union narrowing
+    if (pattern.expr == .ascribed) {
+        const a = pattern.expr.ascribed;
+
+        if (a.expr.expr == .ident and !ast.isDiscardName(a.expr.expr.ident)) {
+            const ti = type_serde.evalTypeExpr(self, a.type_name) catch types_mod.TypeInfo{ .tag = .any };
+            try state.setLocalTypeHint(self, a.expr.expr.ident, ti);
+
+            return;
+        }
+
+        return try narrowMatchPattern(self, a.expr, subject_type);
+    }
 
     const items = switch (pattern.expr) {
         .tuple_pattern, .table_pattern => |items| items,
         else => return,
     };
+
+    // ascribed items narrow from their annotation
+    //   ; whatever the subject
+    for (items) |item| {
+        if (item.expr != .ascribed) continue;
+        const a = item.expr.ascribed;
+
+        if (a.expr.expr == .ident and !ast.isDiscardName(a.expr.expr.ident)) {
+            const ti = type_serde.evalTypeExpr(self, a.type_name) catch types_mod.TypeInfo{ .tag = .any };
+            try state.setLocalTypeHint(self, a.expr.expr.ident, ti);
+        }
+    }
+
+    if (subject_type.tag != .@"union") return;
 
     if (items.len == 0) return;
 
@@ -902,6 +1118,19 @@ fn narrowMatchPattern(
         try types_mod.appendUnionVariantPayload(self.alloc, variant, &payload);
 
         for (items[1..], 0..) |item, i| {
+            // ascriptions win over the union payload
+            //   ; for the names they cover
+            if (item.expr == .ascribed) {
+                const a = item.expr.ascribed;
+
+                if (a.expr.expr == .ident and !ast.isDiscardName(a.expr.expr.ident)) {
+                    const ti = type_serde.evalTypeExpr(self, a.type_name) catch types_mod.TypeInfo{ .tag = .any };
+                    try state.setLocalTypeHint(self, a.expr.expr.ident, ti);
+                }
+
+                continue;
+            }
+
             if (item.expr == .ident and !ast.isDiscardName(item.expr.ident)) {
                 const narrowed = if (i < payload.items.len) payload.items[i] else types_mod.TypeInfo{ .tag = .any };
                 try state.setLocalTypeHint(self, item.expr.ident, narrowed);

@@ -2229,6 +2229,69 @@ test "match table nested patterns" {
     , 5);
 }
 
+test "match ascriptions" {
+    try t.topNumber(
+        \\ let a = 123
+        \\ match a
+        \\ | x: num => x
+        \\ | x: string => 0
+    , 123);
+    try t.topNumber(
+        \\ let a = "hi"
+        \\ match a
+        \\ | x: num => 0
+        \\ | x: string => 7
+        \\ | _ => 8
+    , 7);
+    try t.topNumber(
+        \\ let a = 123
+        \\ match a
+        \\ | x: string => 0
+        \\ | _ => 9
+    , 9);
+
+    try t.topNumber(
+        \\ match {1, 2}
+        \\ | {x, y: number} => x + y
+        \\ | _ => 0
+    , 3);
+    try t.topNumber(
+        \\ match {1, "two"}
+        \\ | {x, y: number} => 1
+        \\ | {x, y} => 2
+        \\ | _ => 3
+    , 2);
+    try t.topNumber(
+        \\ match {:ok, 1}
+        \\ | {t: :ok | :err, v} => v
+        \\ | _ => 0
+    , 1);
+    try t.topNumber(
+        \\ match {{5}, 1}
+        \\ | {{n: number}, _} => n
+        \\ | _ => 0
+    , 5);
+    try t.topNumber(
+        \\ let a = {1, 2}
+        \\ match a
+        \\ | {x} => 10
+        \\ | {x, y: number, z} => 7
+        \\ | {x, y} => 5
+    , 5);
+}
+
+test "ascriptions in value position are rejected" {
+    try t.expectCompileFailure(
+        \\ const t = {x: number}
+        \\ t
+    ,
+        .ParseError,
+        1,
+        13,
+        "type ascriptions only go in match patterns",
+    );
+}
+
 //
 // assignment & binding
 //

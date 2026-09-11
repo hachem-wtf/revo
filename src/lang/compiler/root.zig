@@ -859,6 +859,11 @@ pub const Compiler = struct {
                 expr,
                 "table patterns do not compile as values",
             ),
+            .ascribed => return self.fail(
+                .UnsupportedSyntax,
+                expr,
+                "type ascriptions only go in match patterns",
+            ),
             .range_literal => return self.fail(
                 .UnsupportedSyntax,
                 expr,
