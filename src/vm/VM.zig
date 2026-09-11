@@ -650,14 +650,14 @@ pub fn setPanicMessageOwned(self: *VM, message: []u8) void {
     self.panic_message = message;
 }
 
-/// set the panic message + source span from an `:error` result tuple's message
-/// item (items[1], skipped when absent); `pc` points one past the instruction
+/// set the panic message + source span from an `:err` table's message
+/// item (payload, skipped when absent); `pc` points one past the instruction
 /// that produced the error
-pub fn panicFromErrTuple(self: *VM, tuple: *root.tuple.Tuple, pc: usize) error{ OutOfMemory, Panic }!void {
-    if (tuple.items.len > 1) {
+pub fn panicFromErrPayload(self: *VM, payload: ?Data, pc: usize) error{ OutOfMemory, Panic }!void {
+    if (payload) |p| {
         var buf = std.Io.Writer.Allocating.init(self.runtime.alloc);
         defer buf.deinit();
-        tuple.items[1].write(&buf.writer, self, .display) catch |err| switch (err) {
+        p.write(&buf.writer, self, .pretty) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             else => return error.Panic,
         };
@@ -1579,7 +1579,24 @@ pub fn returnRegister(
                 if (tag.asAtom() ==
                     revo.core_atoms.atomId(.err))
                 {
-                    try self.panicFromErrTuple(tuple, fiber.pc);
+                    try self.panicFromErrPayload(
+                        if (tuple.items.len > 1) tuple.items[1] else null,
+                        fiber.pc,
+                    );
+                    return error.Panic;
+                }
+            }
+        } else if (result.asTable()) |result_tid| {
+            const table = try self.tables.get(result_tid);
+            if (table.array.items.len >= 1) {
+                const tag = table.array.items[0];
+                if (tag.asAtom() ==
+                    revo.core_atoms.atomId(.err))
+                {
+                    try self.panicFromErrPayload(
+                        if (table.array.items.len > 1) table.array.items[1] else null,
+                        fiber.pc,
+                    );
                     return error.Panic;
                 }
             }

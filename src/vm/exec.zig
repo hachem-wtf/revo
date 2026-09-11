@@ -913,22 +913,37 @@ inline fn execFiberDispatch(
             const val = regRead(regs, base, instr.a);
             const propagate_errors = instr.bx == 0;
 
-            const tuple_id = if (val.asTuple()) |tid| tid else {
+            // result tag & payload for tuple and table shapes alike
+            //   ; anything else passes through untouched
+            var tag: ?Data = null;
+            var payload: ?Data = null;
+            if (val.asTuple()) |tid| {
+                const tuple = try self.tuples.get(tid);
+                if (tuple.items.len == 0) {
+                    if (!fetchNext(fiber, &instr)) break :dispatch;
+                    continue :dispatch instr.op;
+                }
+                tag = tuple.items[0];
+                payload = if (tuple.items.len > 1) tuple.items[1] else null;
+            } else if (val.asTable()) |tid| {
+                const table = try self.tables.get(tid);
+                if (table.array.items.len == 0) {
+                    if (!fetchNext(fiber, &instr)) break :dispatch;
+                    continue :dispatch instr.op;
+                }
+                tag = table.array.items[0];
+                payload = if (table.array.items.len > 1) table.array.items[1] else null;
+            }
+
+            const t = tag orelse {
                 if (!fetchNext(fiber, &instr)) break :dispatch;
                 continue :dispatch instr.op;
             };
-            const tuple = try self.tuples.get(tuple_id);
-            if (tuple.items.len == 0) {
-                if (!fetchNext(fiber, &instr)) break :dispatch;
-                continue :dispatch instr.op;
-            }
 
-            const tag = tuple.items[0];
-
-            if (tag.asAtom() == revo.core_atoms.atomId(.err)) {
+            if (t.asAtom() == revo.core_atoms.atomId(.err)) {
                 if (propagate_errors) {
                     if (fiber.frames.items.len == 2) {
-                        self.panicFromErrTuple(tuple, fiber.pc) catch |e| return self.evalFailure(e);
+                        self.panicFromErrPayload(payload, fiber.pc) catch |e| return self.evalFailure(e);
                         return self.evalFailure(error.Panic);
                     }
                     self.returnRegister(.{ .op = .ret, .a = instr.a }) catch |e| return self.evalFailure(e);
@@ -945,9 +960,9 @@ inline fn execFiberDispatch(
                 continue :dispatch instr.op;
             }
 
-            if (tag.asAtom() == revo.core_atoms.atomId(.ok)) {
-                if (tuple.items.len > 1) {
-                    regWrite(regs, base, instr.a, tuple.items[1]);
+            if (t.asAtom() == revo.core_atoms.atomId(.ok)) {
+                if (payload) |p| {
+                    regWrite(regs, base, instr.a, p);
                 }
             }
 
@@ -961,6 +976,12 @@ inline fn execFiberDispatch(
                 if (tuple2.items.len > 0) {
                     const tag2 = tuple2.items[0];
                     break :blk tag2.asAtom() == revo.core_atoms.atomId(.err);
+                }
+                break :blk false;
+            } else if (val.asTable()) |tid| blk: {
+                const table = try self.tables.get(tid);
+                if (table.array.items.len > 0) {
+                    break :blk table.array.items[0].asAtom() == revo.core_atoms.atomId(.err);
                 }
                 break :blk false;
             } else false;

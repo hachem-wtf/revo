@@ -712,7 +712,7 @@ test "errs returned at toplevel report proper span" {
         \\ do
         \\ (:err, "boom")?
         \\ end
-    , .Panic, 2, 2, "boom");
+    , .Panic, 2, 2, "\x1b[32m\"boom\"\x1b[0m");
 }
 
 test "if-let works" {
@@ -2803,16 +2803,16 @@ test "try ? unwraps ok tuple" {
 test "try ? error propagation" {
     try t.expectRuntimeFailureWithMessage(
         \\ (:err, :not_found)?
-    , .Panic, ":not_found");
+    , .Panic, "\x1b[33m:not_found\x1b[0m");
     try t.expectRuntimeFailureWithMessage(
         \\ const f = fn() (:err, :not_found)
         \\ f()?
         \\ 99
-    , .Panic, ":not_found");
+    , .Panic, "\x1b[33m:not_found\x1b[0m");
     try t.expectRuntimeFailureWithMessage(
         \\ const f = fn() (:err, :fail)
         \\ f()?
-    , .Panic, ":fail");
+    , .Panic, "\x1b[33m:fail\x1b[0m");
 }
 
 test "try ? chains with pipe" {
@@ -2865,6 +2865,45 @@ test "orelse right side" {
     try t.topNumber(
         \\ (:err, :fail) orelse (:ok, 88)
     , 88);
+}
+
+test "table try/?/orelse/prop" {
+    try t.topNumber(
+        \\ {:ok, 42}?
+    , 42);
+    try t.topNumber(
+        \\ const f = fn() {:ok, 10}
+        \\ f()?
+    , 10);
+    try t.topNumber(
+        \\ match {:ok, {:inner, 42}}?
+        \\ | {:inner, v} => v
+        \\ | _ => 0
+    , 42);
+    // TODO: make testing it not as painful as this
+    try t.expectRuntimeFailureWithMessage(
+        \\ {:err, :not_found}?
+    , .Panic, "\x1b[33m:not_found\x1b[0m");
+    try t.expectRuntimeFailureWithMessage(
+        \\ const f = fn() {:err, :not_found}
+        \\ f()?
+        \\ 99
+    , .Panic, "\x1b[33m:not_found\x1b[0m");
+    try t.topNumber(
+        \\ {:err, :fail} orelse 42
+    , 42);
+    try t.topNumber(
+        \\ {:ok, 100} orelse 42
+    , 100);
+    try t.topNumber(
+        \\ {:err, :a} orelse {:err, :b} orelse 99
+    , 99);
+    try t.topNumber(
+        \\ {:err, :fail} orelse {:ok, 88}
+    , 88);
+    try t.topNumber(
+        \\ {:ok, 15}? orelse 33
+    , 15);
 }
 
 //
