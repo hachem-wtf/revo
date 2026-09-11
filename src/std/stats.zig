@@ -638,19 +638,6 @@ pub const Impl = struct {
 };
 
 pub const impls: []const api.Impl = root.impls(Impl).val;
-// ++ &.{
-// .{ .name = "fmean", .f = root.define(&.{ .table }, fmean) },
-// .{ .name = "geometric_mean", .f = root.define(&.{ .table }, geometric_mean) },
-// .{ .name = "harmonic_mean", .f = root.defineVariadic(&.{.table}, harmonic_mean) },
-// .{ .name = "median_low", .f = root.define(&.{ .table }, median_low) },
-// .{ .name = "median_high", .f = root.define(&.{ .table }, median_high) },
-// .{ .name = "median_grouped", .f = root.define(&.{.table}, median_grouped) },
-// .{ .name = "multimode", .f = root.define(&.{ .table }, multimode) },
-// .{ .name = "quantiles", .f = root.define(&.{.table}, quantiles) },
-// .{ .name = "covariance", .f = root.define(&.{ .table }, covariance) },
-// .{ .name = "correlation", .f = root.define(&.{.table}, correlation) },
-// .{ .name = "linear_regression", .f = root.define(&.{.table}, linear_regression) },
-// };
 
 test "stats methods" {
     try testing.topTrue("{1, 1, 1, 2, 3, 3} |> stats.frequencies() == {1=3, 2=1, 3=2}");
@@ -692,17 +679,6 @@ test "stats methods" {
 // median_grouped(data, interval=1.0)
 // Median (50th percentile) of grouped data.
 
-// multimode(data)
-// List of modes (most common values) of discrete or nominal data.
-
 // quantiles(data, n=4, method='exclusive')
 // Divide data into intervals with equal probability.
 
-// covariance(x, y)
-// Sample covariance for two variables.
-
-// correlation(x, y, method='linear')
-// Pearson and Spearman’s correlation coefficients.
-
-// linear_regression(x, y, proportional=False)
-// Slope and intercept for simple linear regression.
