@@ -283,9 +283,10 @@ pub fn predeclareTypeAliases(self: *Compiler, exprs: []const *Node) !void {
             .type_alias => |t| {
                 // declares are values, not type aliases - do not pollute type space
                 if (decl.kind == .declare_decl) continue;
-                if (self.type_aliases.contains(t.name)) continue;
+                const key = ast.bareName(t);
+                if (self.type_aliases.contains(key)) continue;
                 const type_info = try type_serde.evalTypeExpr(self, t.type_expr);
-                try self.type_aliases.put(t.name, type_info);
+                try self.type_aliases.put(key, type_info);
             },
             else => {},
         },

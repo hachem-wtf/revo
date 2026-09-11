@@ -1,15 +1,26 @@
-// stdlib as data: sigs and docs live in `src/std/iface/*.d.rv`, one file
-// per group. `#* ... *#` blocks are markdown docs (bare ``` fences for
-// code), `pub declare <head> = fn(...) -> ret` lines are sigs, `#`/`##`
-// lines are editorial comments. heads may carry a `[T]` generic suffix; a
-// bare `__call`/`__index` head sets the core key. zig supplies impls only
-// (`pub const impls: []const api.Impl` per file).
-//
-// `loadAllSpecs` merges the two at boot; a missing or orphaned impl is a
-// hard error, so docs can't drift from the runtime. the primitive type
-// metatable *is* the module table: dynamic `x:method()` dispatch gets a
-// single direct `getRaw`, numeric indexing the one exception via the
-// `__index` native stashed inside the module table
+//!
+//! welcome to stdlib as data
+//!
+//! ~ sigs and docs live in `src/std/iface/*.d.rv`
+//!   one file per group
+//! ~ `#* ... *#` blocks are markdown docs (bare ``` fences for code)
+//! ~ `pub declare <head> = <type>` lines are sigs, `pub type N = <type>`
+//!   lines are type-only aliases with no impl
+//! ~ `#`/`##` lines are editorial comments
+//! ~ heads may carry a `[T]` generic suffix
+//! ~ any `__` key lands in a metatable automatically
+//! ~ zig supplies impls only (`pub const impls: []const api.Impl` per file)
+//! ~ each spec stores the whole RHS type once; sig text, variadic-ness,
+//!   and core keys derive from it, so new type shapes need no new fields
+//!
+//! ~ `loadAllSpecs` merges the two at boot
+//!   a missing or orphaned impl is a hard error,
+//!   so docs can't drift from the runtime
+//! ~ the primitive type metatable *is* the module table:
+//!   dynamic `x:method()` dispatch gets a single direct `getRaw`,
+//!   numeric indexing the one exception via the `__index` native
+//!   stashed inside the module table
+//!
 
 const std = @import("std");
 
@@ -22,93 +33,47 @@ const HostFunc = root.HostFunc;
 
 pub const regex_on = @import("build_options").regex;
 
-pub const IfaceGroup = struct {
-    name: []const u8,
-    src: []const u8,
-};
-
-pub const iface_groups: []const IfaceGroup = &.{
-    .{ .name = "root", .src = @embedFile("iface/root.d.rv") },
-    .{ .name = "os", .src = @embedFile("iface/os.d.rv") },
-    .{ .name = "re", .src = @embedFile("iface/re.d.rv") },
-    .{ .name = "number", .src = @embedFile("iface/number.d.rv") },
-    .{ .name = "string", .src = @embedFile("iface/string.d.rv") },
-    .{ .name = "table", .src = @embedFile("iface/table.d.rv") },
-    .{ .name = "tuple", .src = @embedFile("iface/tuple.d.rv") },
-    .{ .name = "iter", .src = @embedFile("iface/iter.d.rv") },
-    .{ .name = "math", .src = @embedFile("iface/math.d.rv") },
-    .{ .name = "stats", .src = @embedFile("iface/stats.d.rv") },
-    .{ .name = "frame", .src = @embedFile("iface/frame.d.rv") },
-    .{ .name = "json", .src = @embedFile("iface/json.d.rv") },
-    .{ .name = "csv", .src = @embedFile("iface/csv.d.rv") },
-    .{ .name = "time", .src = @embedFile("iface/time.d.rv") },
-    .{ .name = "net", .src = @embedFile("iface/net.d.rv") },
-    .{ .name = "http", .src = @embedFile("iface/http.d.rv") },
-    .{ .name = "uri", .src = @embedFile("iface/uri.d.rv") },
-    .{ .name = "fs", .src = @embedFile("iface/fs.d.rv") },
-    .{ .name = "revo", .src = @embedFile("iface/revo.d.rv") },
-    .{ .name = "compress", .src = @embedFile("iface/compress.d.rv") },
-    .{ .name = "rng", .src = @embedFile("iface/rng.d.rv") },
-    .{ .name = "argparse", .src = @embedFile("iface/argparse.d.rv") },
-};
-
 /// the zig side of one spec: registry key + implementation
 pub const Impl = struct {
     name: []const u8,
     f: HostFunc,
 };
 
-pub const ImplGroup = struct {
+pub const Group = struct {
     name: []const u8,
+    src: []const u8,
     impls: []const Impl,
+
+    fn init(name: []const u8, src: []const u8, impls: []const Impl) Group {
+        return .{ .name = name, .src = src, .impls = impls };
+    }
 };
 
 /// the `re` group is dropped at comptime when regex is off so the
 /// mvzr/io chain never reaches targets like freestanding wasm
-pub const impl_groups: []const ImplGroup = if (regex_on) &.{
-    .{ .name = "root", .impls = @import("root.zig").root_impls },
-    .{ .name = "os", .impls = @import("root.zig").os_impls },
-    .{ .name = "re", .impls = @import("regex.zig").impls },
-    .{ .name = "number", .impls = @import("number.zig").impls },
-    .{ .name = "string", .impls = @import("string.zig").impls },
-    .{ .name = "table", .impls = @import("table.zig").impls },
-    .{ .name = "tuple", .impls = @import("tuple.zig").impls },
-    .{ .name = "iter", .impls = @import("iter.zig").impls },
-    .{ .name = "math", .impls = @import("math.zig").impls },
-    .{ .name = "stats", .impls = @import("stats.zig").impls },
-    .{ .name = "frame", .impls = @import("frame.zig").impls },
-    .{ .name = "json", .impls = @import("json.zig").impls },
-    .{ .name = "csv", .impls = @import("csv.zig").impls },
-    .{ .name = "time", .impls = @import("time.zig").impls },
-    .{ .name = "net", .impls = @import("net.zig").impls },
-    .{ .name = "http", .impls = @import("http.zig").impls },
-    .{ .name = "uri", .impls = @import("uri.zig").impls },
-    .{ .name = "fs", .impls = @import("fs.zig").impls },
-    .{ .name = "revo", .impls = @import("revo.zig").impls },
-    .{ .name = "compress", .impls = @import("compress.zig").impls },
-    .{ .name = "rng", .impls = @import("rng.zig").impls },
-    .{ .name = "argparse", .impls = @import("argparse_std.zig").impls },
-} else &.{
-    .{ .name = "root", .impls = @import("root.zig").root_impls },
-    .{ .name = "os", .impls = @import("root.zig").os_impls },
-    .{ .name = "number", .impls = @import("number.zig").impls },
-    .{ .name = "string", .impls = @import("string.zig").impls },
-    .{ .name = "table", .impls = @import("table.zig").impls },
-    .{ .name = "tuple", .impls = @import("tuple.zig").impls },
-    .{ .name = "iter", .impls = @import("iter.zig").impls },
-    .{ .name = "math", .impls = @import("math.zig").impls },
-    .{ .name = "stats", .impls = @import("stats.zig").impls },
-    .{ .name = "frame", .impls = @import("frame.zig").impls },
-    .{ .name = "json", .impls = @import("json.zig").impls },
-    .{ .name = "time", .impls = @import("time.zig").impls },
-    .{ .name = "net", .impls = @import("net.zig").impls },
-    .{ .name = "http", .impls = @import("http.zig").impls },
-    .{ .name = "uri", .impls = @import("uri.zig").impls },
-    .{ .name = "fs", .impls = @import("fs.zig").impls },
-    .{ .name = "revo", .impls = @import("revo.zig").impls },
-    .{ .name = "compress", .impls = @import("compress.zig").impls },
-    .{ .name = "rng", .impls = @import("rng.zig").impls },
-    .{ .name = "argparse", .impls = @import("argparse_std.zig").impls },
+pub const groups: []const Group = &.{
+    Group.init("root", @embedFile("iface/root.d.rv"), @import("root.zig").root_impls),
+    Group.init("os", @embedFile("iface/os.d.rv"), @import("root.zig").os_impls),
+    Group.init("re", @embedFile("iface/re.d.rv"), if (regex_on) @import("regex.zig").impls else &.{}),
+    Group.init("number", @embedFile("iface/number.d.rv"), @import("number.zig").impls),
+    Group.init("string", @embedFile("iface/string.d.rv"), @import("string.zig").impls),
+    Group.init("table", @embedFile("iface/table.d.rv"), @import("table.zig").impls),
+    Group.init("frame", @embedFile("iface/frame.d.rv"), @import("frame.zig").impls),
+    Group.init("tuple", @embedFile("iface/tuple.d.rv"), @import("tuple.zig").impls),
+    Group.init("iter", @embedFile("iface/iter.d.rv"), @import("iter.zig").impls),
+    Group.init("math", @embedFile("iface/math.d.rv"), @import("math.zig").impls),
+    Group.init("stats", @embedFile("iface/stats.d.rv"), @import("stats.zig").impls),
+    Group.init("json", @embedFile("iface/json.d.rv"), @import("json.zig").impls),
+    Group.init("csv", @embedFile("iface/csv.d.rv"), @import("csv.zig").impls),
+    Group.init("time", @embedFile("iface/time.d.rv"), @import("time.zig").impls),
+    Group.init("net", @embedFile("iface/net.d.rv"), @import("net.zig").impls),
+    Group.init("http", @embedFile("iface/http.d.rv"), @import("http.zig").impls),
+    Group.init("uri", @embedFile("iface/uri.d.rv"), @import("uri.zig").impls),
+    Group.init("fs", @embedFile("iface/fs.d.rv"), @import("fs.zig").impls),
+    Group.init("revo", @embedFile("iface/revo.d.rv"), @import("revo.zig").impls),
+    Group.init("compress", @embedFile("iface/compress.d.rv"), @import("compress.zig").impls),
+    Group.init("rng", @embedFile("iface/rng.d.rv"), @import("rng.zig").impls),
+    Group.init("argparse", @embedFile("iface/argparse.d.rv"), @import("argparse_std.zig").impls),
 };
 
 /// merged, runtime view of the stdlib surface; built by `loadAllSpecs`
@@ -124,34 +89,44 @@ pub fn loadAllSpecs(caller_alloc: std.mem.Allocator) ![]const []const FnSpec {
 
     const pa = if (revo.is_freestanding) caller_alloc else std.heap.page_allocator;
 
-    var groups = try std.ArrayList([]const FnSpec).initCapacity(pa, impl_groups.len);
+    var loaded = try std.ArrayList([]const FnSpec).initCapacity(pa, groups.len);
     errdefer {
-        for (groups.items) |g| {
+        for (loaded.items) |g| {
             for (g) |s| s.deinit(pa);
             pa.free(g);
         }
-        groups.deinit(pa);
+        loaded.deinit(pa);
     }
-    for (impl_groups) |ig| {
-        const src = ifaceSrc(ig.name);
-        const specs = try parseGroup(pa, src);
+    for (groups) |ig| {
+        // regex-off rows
+        //    (and any future all-types group)
+        // carry no impls and stay out of every surface instead of erroring
+        if (ig.impls.len == 0) continue;
+        const specs = try parseGroup(pa, ig.src);
         for (specs, 0..) |*s, i| {
+            if (s.is_type) continue;
             var k: usize = 0;
+
             if (i > 0) for (specs[0..i]) |other| {
+                if (other.is_type) continue;
                 if (std.mem.eql(u8, other.name, s.name)) k += 1;
             };
-            s.f = implFor(ig.impls, s, k) orelse stub: {
-                if (comptime revo.is_freestanding) break :stub root.defineStubVariadic(&[_]TypeSpec{});
-                std.debug.print("missing {s}\n", .{s.sig});
+
+            s.f = implFor(ig.impls, s, k) orelse {
+                var err_buf = std.Io.Writer.Allocating.init(pa);
+                defer err_buf.deinit();
+                renderSignature(&err_buf.writer, s.*) catch {};
+
+                std.debug.print("missing {s}\n", .{err_buf.written()});
                 @panic("missing an std def");
             };
         }
         for (ig.impls) |imp| {
             if (findSpec(specs, imp.name) == null) return error.StdlibImplUnused;
         }
-        try groups.append(pa, specs);
+        try loaded.append(pa, specs);
     }
-    const owned = try groups.toOwnedSlice(pa);
+    const owned = try loaded.toOwnedSlice(pa);
     permanent_cache = owned;
     full_specs = owned;
     return owned;
@@ -161,25 +136,77 @@ pub fn loadAllSpecs(caller_alloc: std.mem.Allocator) ![]const []const FnSpec {
 /// the cache lives in page_allocator so no debug allocator tracks it
 pub fn freeLoadedSpecs(_: std.mem.Allocator, _: []const []const FnSpec) void {}
 
-fn ifaceSrc(name: []const u8) []const u8 {
-    for (iface_groups) |ig| {
-        if (std.mem.eql(u8, ig.name, name)) return ig.src;
+/// spans of every `pub macro` / `pub proc` decl in one source
+/// . span values only
+/// , no lifetimes involved
+fn collectMacroSpans(alloc: std.mem.Allocator, src: []const u8) ![]ast.Span {
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    defer arena.deinit();
+    const parsed = try revo.lang.parseSourceReport(arena.allocator(), src);
+
+    const tree = switch (parsed) {
+        .ok => |node| node,
+        .err => return error.IfaceParseFailed,
+    };
+
+    const items: []const *const revo.lang.Node = if (tree.expr == .block) tree.expr.block else &.{tree};
+    var out = std.ArrayList(ast.Span).empty;
+    errdefer out.deinit(alloc);
+
+    for (items) |item| {
+        if (item.expr != .decl) continue;
+        const d = item.expr.decl;
+        if (!d.pub_) continue;
+
+        switch (d.inner.expr) {
+            .macro_expr, .proc_macro => try out.append(alloc, item.span),
+            else => {},
+        }
     }
-    return "";
+    return out.toOwnedSlice(alloc);
 }
 
-/// callable head of sig: `fs.open(path: string)` -> `fs.open`
-fn specHead(sig: []const u8) []const u8 {
-    const end = std.mem.indexOfScalar(u8, sig, '(') orelse sig.len;
-    var head = sig[0..end];
-    if (std.mem.indexOfScalar(u8, head, '[')) |open| head = head[0..open];
-    return head;
+var macro_sources_cache: ?[]const []const u8 = null;
+
+/// source slices of every `pub macro` / `pub proc` across embedded groups
+pub fn macroSources(caller_alloc: std.mem.Allocator) ![]const []const u8 {
+    if (macro_sources_cache) |cached| return cached;
+
+    const pa = if (revo.is_freestanding) caller_alloc else std.heap.page_allocator;
+
+    var out = std.ArrayList([]const u8).empty;
+    errdefer out.deinit(pa);
+    for (groups) |g| {
+        // happy path
+        //   macro decls need their keyword spelled out, so most
+        //   groups skip the parse entirely (prose mentions still parse)
+        if (std.mem.indexOf(u8, g.src, "macro") == null and
+            std.mem.indexOf(u8, g.src, "proc") == null) continue;
+        const spans = try collectMacroSpans(pa, g.src);
+        defer pa.free(spans);
+        for (spans) |span| try out.append(pa, g.src[span.start..span.end]);
+    }
+    const owned = try out.toOwnedSlice(pa);
+    macro_sources_cache = owned;
+    return owned;
 }
 
-/// impl registered under the full head like `f nfs.stat` pairs outright
+/// registry key for impl pairing
+/// , derived from the head so new heads and new `__` keys work without touching this
+/// : `fs.open`, `string:len`
+fn headKey(spec: *const FnSpec, buf: []u8) []const u8 {
+    return switch (spec.head.kind) {
+        .global => spec.name,
+        .module => std.fmt.bufPrint(buf, "{s}.{s}", .{ spec.head.module.?, spec.name }) catch spec.name,
+        .method => std.fmt.bufPrint(buf, "{s}:{s}", .{ spec.head.target_name.?, spec.name }) catch spec.name,
+    };
+}
+
+/// impl registered under the full head like `fs.stat` pairs outright
 /// otherwise the k-th spec with this name takes the k-th bare-named impl
 fn implFor(impls: []const Impl, spec: *const FnSpec, k: usize) ?HostFunc {
-    const head = specHead(spec.sig);
+    var key_buf: [256]u8 = undefined;
+    const head = headKey(spec, &key_buf);
     for (impls) |imp| if (std.mem.eql(u8, imp.name, head)) return imp.f;
     var seen: usize = 0;
     for (impls) |imp| {
@@ -191,9 +218,11 @@ fn implFor(impls: []const Impl, spec: *const FnSpec, k: usize) ?HostFunc {
 }
 
 fn findSpec(specs: []const FnSpec, impl_name: []const u8) ?*const FnSpec {
+    var key_buf: [256]u8 = undefined;
     for (specs) |*s| {
+        if (s.is_type) continue;
         if (std.mem.eql(u8, s.name, impl_name)) return s;
-        if (std.mem.eql(u8, specHead(s.sig), impl_name)) return s;
+        if (std.mem.eql(u8, headKey(s, &key_buf), impl_name)) return s;
     }
     return null;
 }
@@ -206,16 +235,89 @@ pub fn find(name: []const u8) ?*const FnSpec {
     return null;
 }
 
-/// a sig is the rendered signature: `fs.open(path: string) -> !table`
+/// first callable match wins
+/// ; type-only aliases are not values
+pub fn findFn(name: []const u8) ?*const FnSpec {
+    for (full_specs) |group| for (group) |*spec| {
+        if (spec.is_type) continue;
+        if (std.mem.eql(u8, spec.name, name)) return spec;
+    };
+    return null;
+}
+
+/// `fs.open(path: string) -> !table` for fns,
+///   the bare head for type-only aliases
+/// . computed from the stored type, never stored
+/// , so new type shapes render without new code
 pub fn renderSignature(w: *std.Io.Writer, spec: FnSpec) !void {
-    try w.writeAll(spec.sig);
+    try renderSignatureInner(w, spec, false);
+}
+
+/// head plus `[T]` suffix: `fs.open`, `string:len`, `tuple.unwrap_err[T]`
+fn renderHead(w: *std.Io.Writer, spec: FnSpec, strip_method: bool) !void {
+    switch (spec.head.kind) {
+        .global => try w.writeAll(spec.name),
+        .module => try w.print("{s}.{s}", .{ spec.head.module.?, spec.name }),
+        .method => if (strip_method)
+            try w.writeAll(spec.name)
+        else
+            try w.print("{s}:{s}", .{ spec.head.target_name.?, spec.name }),
+    }
+    if (spec.type_params.len > 0) {
+        try w.writeByte('[');
+        for (spec.type_params, 0..) |tp, i| {
+            if (i > 0) try w.writeAll(", ");
+            try w.writeAll(tp);
+        }
+        try w.writeByte(']');
+    }
+}
+
+/// method-group display
+/// : `len(self: string)` instead of `string:len(self: string)`
+pub fn renderSignatureStripMethod(w: *std.Io.Writer, spec: FnSpec) !void {
+    try renderSignatureInner(w, spec, true);
+}
+
+fn renderSignatureInner(w: *std.Io.Writer, spec: FnSpec, strip_method: bool) !void {
+    try renderHead(w, spec, strip_method);
+    if (spec.is_type) return;
+    const f = spec.type.kind.function;
+    try w.writeAll("(");
+
+    for (f.params, 0..) |p, i| {
+        if (i > 0) try w.writeAll(", ");
+        if (p.optional) try w.writeByte('?');
+        try w.writeAll(p.name);
+        if (p.type_name) |tn| {
+            try w.writeAll(": ");
+            try revo.lang.type_serde.printTypeExpr(tn, w);
+        }
+        if (p.variadic) try w.writeAll("...");
+    }
+    try w.writeAll(")");
+    if (f.return_type) |r| {
+        try w.writeAll(" -> ");
+        try revo.lang.type_serde.printTypeExpr(r, w);
+    }
+}
+
+/// `true` when any fn param is variadic; derived from the stored type
+pub fn isVariadic(spec: *const FnSpec) bool {
+    if (spec.is_type) return false;
+    for (spec.type.kind.function.params) |p| if (p.variadic) return true;
+    return false;
+}
+
+/// metatable key for `__` names, validated at parse time; null otherwise
+pub fn coreKey(spec: *const FnSpec) ?revo.core_atoms {
+    if (!std.mem.startsWith(u8, spec.name, "__")) return null;
+    return std.meta.stringToEnum(revo.core_atoms, spec.name);
 }
 
 pub const Kind = enum { global, module, method };
 
-/// who a spec belongs to:
-///   filled at build time, read everywhere else
-///   never re-derived from the sig string
+/// who a spec belongs to, derived once from the declare head at parse time
 pub const Head = struct {
     kind: Kind,
     module: ?[]const u8 = null,
@@ -224,30 +326,20 @@ pub const Head = struct {
     target_name: ?[]const u8 = null,
 };
 
+/// one declaration from a `.d.rv` file
 pub const FnSpec = struct {
     name: []const u8,
-    /// display only, never parsed
-    sig: []const u8,
     head: Head,
     type_params: []const []const u8,
-    /// cloned trees; untyped only outside iface files
-    params: []ast.FnParam,
-    ret: ?*ast.TypeExpr,
+    type: *ast.TypeExpr,
+    is_type: bool = false,
     doc: []const u8 = "",
     module_doc: []const u8 = "",
-    variadic: bool = false,
-    /// a plain value binding (`const width = 80`), not callable
-    is_value: bool = false,
-    /// when set, the metatable key is this core atom (e.g. `__index`)
-    /// instead of `internAtom(name)`. only `__index` uses it today
-    core_key: ?revo.core_atoms = null,
-    /// default values for optional params (parallel to params, nullis no default)
-    default_values: []const ?*ast.Node = &.{},
     f: HostFunc,
 
     /// release one spec's owned strings and trees, not the spec struct itself
+    /// `module_doc` is borrowed from the docs pass, never freed here
     pub fn deinit(self: *const FnSpec, alloc: std.mem.Allocator) void {
-        alloc.free(self.sig);
         alloc.free(self.name);
 
         if (self.head.module) |m| alloc.free(m);
@@ -255,24 +347,14 @@ pub const FnSpec = struct {
         for (self.type_params) |tp| alloc.free(tp);
         alloc.free(self.type_params);
 
-        for (self.params) |p| {
-            alloc.free(p.name);
-            if (p.type_name) |tn| revo.lang.type_serde.freeTypeExpr(alloc, tn);
-        }
-
-        alloc.free(self.params);
-        if (self.ret) |r| revo.lang.type_serde.freeTypeExpr(alloc, r);
+        revo.lang.type_serde.freeTypeExpr(alloc, self.type);
         alloc.free(self.doc);
-        if (self.default_values.len > 0) alloc.free(self.default_values);
     }
 };
 
 // -- [iface] -----------------------------------------------------------------
 
-/// parse one `.d.rv` group with the real language front-end and collect the
-/// `pub declare` decls. the source is ordinary revo - `#* ... *#` doc
-/// comments, `#`/`##` comments and `fn(...) -> t` type expressions all work - so the
-/// doc/sig extraction is just an AST walk, no string scanning
+/// parse one `.d.rv` group and collect speacks
 fn parseGroup(alloc: std.mem.Allocator, src: []const u8) ![]FnSpec {
     var arena = std.heap.ArenaAllocator.init(alloc);
     defer arena.deinit();
@@ -287,40 +369,86 @@ fn parseGroup(alloc: std.mem.Allocator, src: []const u8) ![]FnSpec {
     return collectSpecs(alloc, root_node, true);
 }
 
-/// the spec surface of a parsed node: `pub declare` aliases, plus,outside
-/// iface files, `#* ... *#`-attributed plain fn bindings
+/// the spec surface of a parsed node
 pub fn collectSpecs(alloc: std.mem.Allocator, node: *const revo.lang.Node, iface: bool) ![]FnSpec {
     var specs = std.ArrayList(FnSpec).empty;
     errdefer specs.deinit(alloc);
 
     const items: []const *const revo.lang.Node = if (node.expr != .block) &.{node} else node.expr.block;
     for (items) |item| {
-        // method-style `fn math:twice(x)` parses to a bare assign_expr, no
-        // decl wrapper - only docgen collects these
+        // method-style `fn math:twice(x)` parses to a bare assign_expr
+        // , no decl wrapper
+        // - only docgen collects these
         if (item.expr == .assign_expr) {
             if (iface) continue;
-            const v = item.expr.assign_expr.value;
-            if (v.expr != .fn_expr) continue;
-            if (v.expr.fn_expr.doc == null) continue;
-            try specs.append(alloc, try specFromAssign(alloc, item.expr.assign_expr, v.expr.fn_expr.doc));
+            const ae = item.expr.assign_expr;
+            if (ae.value.expr != .fn_expr) continue;
+            const t = ae.value.expr.fn_expr;
+            if (t.doc == null) continue;
+
+            const ix = switch (ae.target.expr) {
+                .index => |x| x,
+                else => continue,
+            };
+
+            if (ix.object.expr != .ident) continue;
+            const key: []const u8 = switch (ix.key.expr) {
+                .hash => |h| h,
+                .ident => |n| n,
+                else => continue,
+            };
+
+            // stack shell
+            // : declSpec clones the tree, nothing borrowed escapes
+            var shell = ast.TypeExpr{ .span = item.span, .kind = .{ .function = .{ .params = t.params, .return_type = t.return_type } } };
+            const synth = ast.TypeAlias{
+                .name = key,
+                .name_span = item.span,
+                .type_expr = &shell,
+                .declare_head = .{ .core = .{ .target = ix.object.expr.ident, .key = key } },
+            };
+
+            try specs.append(alloc, try declSpec(alloc, synth, t.doc, false));
             continue;
         }
         if (item.expr != .decl) continue;
         const d = item.expr.decl;
         switch (d.inner.expr) {
             .type_alias => |t| {
-                if (d.kind != .declare_decl) continue;
-                try specs.append(alloc, try specFromDecl(alloc, t, d.doc orelse t.doc, iface));
+                if (d.kind == .declare_decl) {
+                    try specs.append(alloc, try declSpec(alloc, t, d.doc orelse t.doc, iface));
+                } else if (d.kind == .type_alias_decl and d.pub_) {
+                    try specs.append(alloc, try typeSpec(alloc, t, d.doc orelse t.doc));
+                } else continue;
             },
+            // macros ride along as source via macroSources, never as specs
+            .macro_expr, .proc_macro => {},
             .binding => |b| {
                 const doc = d.doc orelse b.doc;
                 if (iface) continue;
                 if (doc == null) continue;
                 if (b.target.expr != .ident) continue;
                 if (b.value.expr == .fn_expr) {
-                    try specs.append(alloc, try specFromBinding(alloc, b, doc));
+                    const t = b.value.expr.fn_expr;
+                    var shell = ast.TypeExpr{
+                        .span = item.span,
+                        .kind = .{ .function = .{ .params = t.params, .return_type = t.return_type } },
+                    };
+
+                    const synth = ast.TypeAlias{
+                        .name = b.target.expr.ident,
+                        .name_span = item.span,
+                        .type_expr = &shell,
+                    };
+                    try specs.append(alloc, try declSpec(alloc, synth, doc, false));
                 } else {
-                    try specs.append(alloc, try specFromConst(alloc, b.target.expr.ident, doc));
+                    var shell = ast.TypeExpr{ .span = item.span, .kind = .{ .named = "any" } };
+                    const synth = ast.TypeAlias{
+                        .name = b.target.expr.ident,
+                        .name_span = item.span,
+                        .type_expr = &shell,
+                    };
+                    try specs.append(alloc, try declSpecRaw(alloc, synth, doc));
                 }
             },
             else => {},
@@ -329,234 +457,138 @@ pub fn collectSpecs(alloc: std.mem.Allocator, node: *const revo.lang.Node, iface
     return specs.toOwnedSlice(alloc);
 }
 
-/// a `#* ... *#`-attributed `fn obj:name(...)` assignment, spec'd like a
-/// declare: head marks it a method on `obj`
-fn specFromAssign(alloc: std.mem.Allocator, ae: anytype, doc: ?[]const u8) !FnSpec {
-    const t = ae.value.expr.fn_expr;
-    const ix = switch (ae.target.expr) {
-        .index => |x| x,
-        else => return error.IfaceBadBindingTarget,
-    };
-    if (ix.object.expr != .ident) return error.IfaceBadBindingTarget;
-    const key: []const u8 = switch (ix.key.expr) {
-        .hash => |h| h,
-        .ident => |n| n,
-        else => return error.IfaceBadBindingTarget,
-    };
-    const head = try std.fmt.allocPrint(alloc, "{s}:{s}", .{ ix.object.expr.ident, key });
-    defer alloc.free(head);
-    return specFromFn(alloc, head, head, .{
-        .kind = .method,
-        .target = root.typeFromName(ix.object.expr.ident),
-        .target_name = ix.object.expr.ident,
-    }, &.{}, t.params, t.return_type, doc, false);
+/// `pub type` aliases, type-namespace, never strict, even for fn rhs
+fn typeSpec(alloc: std.mem.Allocator, alias: ast.TypeAlias, doc: ?[]const u8) !FnSpec {
+    return declSpecInner(alloc, alias, doc, false, true);
 }
 
-/// a `#* ... *#`-attributed `const f = fn(...)` binding, spec'd like a declare
-fn specFromBinding(alloc: std.mem.Allocator, b: ast.Binding, doc: ?[]const u8) !FnSpec {
-    const t = b.value.expr.fn_expr;
-    const name = b.target.expr.ident;
-    return specFromFn(alloc, name, name, .{ .kind = .global }, &.{}, t.params, t.return_type, doc, false);
+/// the single way declarations enter a spec
+fn declSpec(alloc: std.mem.Allocator, alias: ast.TypeAlias, doc: ?[]const u8, strict: bool) !FnSpec {
+    return declSpecInner(alloc, alias, doc, strict, false);
 }
 
-/// a `#* ... *#`-attributed non-fn binding (`const a = 5`): named value with
-/// no call signature, so the spec's sig is just the name
-fn specFromConst(alloc: std.mem.Allocator, name: []const u8, doc: ?[]const u8) !FnSpec {
-    var doc_buf = std.ArrayList(u8).empty;
-    defer doc_buf.deinit(alloc);
-    if (doc) |d| {
-        try doc_buf.appendSlice(alloc, d);
-        try docFromMarkdown(alloc, &doc_buf);
-    }
-    return .{
-        .name = try alloc.dupe(u8, name),
-        .sig = try alloc.dupe(u8, name),
-        .head = .{ .kind = .global },
-        .type_params = &.{},
-        .params = &.{},
-        .ret = null,
-        .doc = try alloc.dupe(u8, std.mem.trimEnd(u8, doc_buf.items, "\n")),
-        .is_value = true,
-        .f = undefined,
-    };
-}
-
-pub fn specFromDecl(alloc: std.mem.Allocator, alias: ast.TypeAlias, doc: ?[]const u8, strict: bool) !FnSpec {
-    const tps = if (alias.declare_tps.len > 0) blk: {
-        const joined = try std.mem.join(alloc, ", ", alias.declare_tps);
-        defer alloc.free(joined);
-        break :blk try std.fmt.allocPrint(alloc, "[{s}]", .{joined});
-    } else "";
-    defer if (tps.len > 0) alloc.free(tps);
-
-    var name: []const u8 = alias.name;
+fn declSpecInner(alloc: std.mem.Allocator, alias: ast.TypeAlias, doc: ?[]const u8, strict: bool, force_type: bool) !FnSpec {
+    // bare member name is shared logic (ast.bareName)
+    // ; the parser always produces 2+ segments for module heads
+    // , so no length guard here
+    const name: []const u8 = ast.bareName(alias);
     var head: Head = .{ .kind = .global };
-    var mod_text: ?[]u8 = null;
-    defer if (mod_text) |m| alloc.free(m);
-    const head_text: []const u8 = if (alias.declare_head) |dh|
-        switch (dh) {
-            .module => |segs| blk: {
-                name = segs[segs.len - 1];
-                if (segs.len > 1) {
-                    mod_text = try std.mem.join(alloc, ".", segs[0 .. segs.len - 1]);
-                    head = .{ .kind = .module, .module = mod_text.? };
-                }
-                const joined = try std.mem.join(alloc, ".", segs);
-                defer alloc.free(joined);
-                break :blk try std.fmt.allocPrint(alloc, "{s}{s}", .{ joined, tps });
-            },
-            .core => |c| blk: {
-                name = c.key;
-                head = .{ .kind = .method, .target = root.typeFromName(c.target), .target_name = c.target };
-                break :blk try std.fmt.allocPrint(alloc, "{s}:{s}{s}", .{ c.target, c.key, tps });
-            },
-        }
-    else
-        try std.fmt.allocPrint(alloc, "{s}{s}", .{ alias.name, tps });
-    defer alloc.free(head_text);
+    if (alias.declare_head) |dh| switch (dh) {
+        .module => |segs| {
+            head = .{ .kind = .module, .module = try std.mem.join(alloc, ".", segs[0 .. segs.len - 1]) };
+        },
+        .core => |c| {
+            const target = root.typeFromName(c.target) orelse return error.UnknownMethodTarget;
+            head = .{ .kind = .method, .target = target, .target_name = c.target };
+        },
+    };
+    errdefer if (head.module) |m| alloc.free(m);
 
-    if (alias.type_expr.kind != .function) {
-        // non-function alias: a named type, documented like a value
+    if (strict and alias.type_expr.kind == .function) {
+        for (alias.type_expr.kind.function.params) |p| {
+            if (p.type_name == null) return error.IfaceParamNotTyped;
+        }
+    }
+
+    if (std.mem.startsWith(u8, name, "__")) {
+        // a __-name on a target must be a real metatable slot
+        // ; bare unknown __names are plain globals (__internal_dotest etc)
+        if (std.meta.stringToEnum(revo.core_atoms, name) == null and head.kind != .global) {
+            if (head.module) |m| alloc.free(m);
+            return error.BadCoreKey;
+        }
+    }
+
+    const owned_tps = try alloc.alloc([]const u8, alias.declare_tps.len);
+    errdefer alloc.free(owned_tps);
+    for (alias.declare_tps, owned_tps) |tp, *dst| dst.* = try alloc.dupe(u8, tp);
+    errdefer for (owned_tps) |tp| alloc.free(tp);
+
+    const type_tree = try revo.lang.type_serde.cloneTypeExpr(alloc, alias.type_expr);
+    errdefer revo.lang.type_serde.freeTypeExpr(alloc, type_tree);
+
+    const is_type = force_type or type_tree.kind != .function;
+    var doc_text: []const u8 = "";
+    if (is_type) {
         var doc_buf = std.Io.Writer.Allocating.init(alloc);
         defer doc_buf.deinit();
-        try doc_buf.writer.writeAll("alias for `");
-        try revo.lang.type_serde.printTypeExpr(alias.type_expr, &doc_buf.writer);
-        try doc_buf.writer.writeAll("`");
+        try doc_buf.writer.writeAll("alias for\n```revo\n");
+
+        try revo.lang.type_serde.printTypeExpr(type_tree, &doc_buf.writer);
+        try doc_buf.writer.writeAll("\n```");
 
         if (doc) |d| {
             try doc_buf.writer.writeAll("\n\n");
             try doc_buf.writer.writeAll(d);
         }
-        const owned_tps = try alloc.alloc([]const u8, alias.declare_tps.len);
-        for (alias.declare_tps, owned_tps) |tp, *dst| dst.* = try alloc.dupe(u8, tp);
-        return .{
-            .name = try alloc.dupe(u8, name),
-            .sig = try alloc.dupe(u8, head_text),
-            .head = .{
-                .kind = head.kind,
-                .module = if (head.module) |m| try alloc.dupe(u8, m) else null,
-                .target = head.target,
-                .target_name = if (head.target_name) |t| try alloc.dupe(u8, t) else null,
-            },
-            .type_params = owned_tps,
-            .params = &.{},
-            .ret = null,
-            .doc = try alloc.dupe(u8, std.mem.trimEnd(u8, doc_buf.written(), "\n")),
-            .is_value = true,
-            .f = undefined,
-        };
-    }
-    const fn_type = alias.type_expr.kind.function;
 
-    return specFromFn(alloc, name, head_text, head, alias.declare_tps, fn_type.params, fn_type.return_type, doc orelse alias.doc, strict);
-}
+        doc_text = try alloc.dupe(u8, std.mem.trimEnd(u8, doc_buf.written(), "\n"));
+    } else if (doc) |d| {
+        var doc_buf = std.ArrayList(u8).empty;
+        defer doc_buf.deinit(alloc);
 
-/// shared assembly: params, sig text, doc normalization, core key. `strict`
-/// iface sources require every param typed
-/// plain fn bindings may skip
-/// the single way types enter a spec: trees are cloned here
-pub fn specFromFn(
-    alloc: std.mem.Allocator,
-    name: []const u8,
-    head_text: []const u8,
-    head: Head,
-    type_params: []const []const u8,
-    params_in: []const ast.FnParam,
-    return_type: ?*ast.TypeExpr,
-    doc: ?[]const u8,
-    strict: bool,
-) !FnSpec {
-    var params = try std.ArrayList(ast.FnParam).initCapacity(alloc, params_in.len);
-    errdefer params.deinit(alloc);
-
-    var defaults = try std.ArrayList(?*ast.Node).initCapacity(alloc, params_in.len);
-    errdefer defaults.deinit(alloc);
-
-    var variadic = false;
-    var rendered = std.Io.Writer.Allocating.init(alloc);
-    defer rendered.deinit();
-    var args = std.ArrayList(u8).empty;
-    defer args.deinit(alloc);
-
-    for (params_in, 0..) |p, i| {
-        if (i > 0) try args.appendSlice(alloc, ", ");
-        if (p.optional) try args.appendSlice(alloc, "?");
-        try args.appendSlice(alloc, p.name);
-        if (p.type_name) |tn| {
-            rendered.clearRetainingCapacity();
-            try revo.lang.type_serde.printTypeExpr(tn, &rendered.writer);
-            try args.appendSlice(alloc, ": ");
-            try args.appendSlice(alloc, rendered.written());
-        } else if (strict) {
-            return error.IfaceParamNotTyped;
-        }
-        if (p.variadic) {
-            variadic = true;
-            if (p.type_name == null) try args.appendSlice(alloc, ": ");
-            try args.appendSlice(alloc, "...");
-        }
-
-        try params.append(alloc, .{
-            .name = try alloc.dupe(u8, p.name),
-            .name_span = p.name_span,
-            .type_name = if (p.type_name) |tn| try revo.lang.type_serde.cloneTypeExpr(alloc, tn) else null,
-            .optional = p.optional,
-            .default_value = p.default_value,
-            .variadic = p.variadic,
-        });
-        try defaults.append(alloc, p.default_value);
-    }
-
-    var ret_buf = std.Io.Writer.Allocating.init(alloc);
-    defer ret_buf.deinit();
-    const ret_tree: ?*ast.TypeExpr = if (return_type) |r| blk: {
-        try revo.lang.type_serde.printTypeExpr(r, &ret_buf.writer);
-        break :blk try revo.lang.type_serde.cloneTypeExpr(alloc, r);
-    } else null;
-
-    const sig = if (ret_buf.written().len > 0)
-        try std.fmt.allocPrint(alloc, "{s}({s}) -> {s}", .{ head_text, args.items, ret_buf.written() })
-    else
-        try std.fmt.allocPrint(alloc, "{s}({s})", .{ head_text, args.items });
-
-    const tps_owned = try alloc.alloc([]const u8, type_params.len);
-    for (type_params, tps_owned) |tp, *dst| dst.* = try alloc.dupe(u8, tp);
-
-    var doc_buf = std.ArrayList(u8).empty;
-    defer doc_buf.deinit(alloc);
-    if (doc) |d| {
         try doc_buf.appendSlice(alloc, d);
         try docFromMarkdown(alloc, &doc_buf);
-    }
 
-    var core_key: ?revo.core_atoms = null;
-    if (std.mem.startsWith(u8, name, "__")) {
-        if (std.meta.stringToEnum(revo.core_atoms, name)) |atom| {
-            core_key = atom;
-        } else if (head.kind != .global) {
-            // a __-name on a target must be a real metatable slot; bare
-            // unknown __names are plain globals (__internal_dotest etc)
-            return error.BadCoreKey;
-        }
+        doc_text = try alloc.dupe(u8, std.mem.trimEnd(u8, doc_buf.items, "\n"));
+    } else {
+        doc_text = try alloc.dupe(u8, "");
     }
+    errdefer alloc.free(doc_text);
 
     return .{
         .name = try alloc.dupe(u8, name),
-        .sig = sig,
         .head = .{
             .kind = head.kind,
-            .module = if (head.module) |m| try alloc.dupe(u8, m) else null,
+            .module = head.module,
             .target = head.target,
             .target_name = if (head.target_name) |t| try alloc.dupe(u8, t) else null,
         },
-        .type_params = tps_owned,
-        .params = try params.toOwnedSlice(alloc),
-        .ret = ret_tree,
-        .doc = try alloc.dupe(u8, std.mem.trimEnd(u8, doc_buf.items, "\n")),
-        .variadic = variadic,
-        .core_key = core_key,
-        .default_values = try defaults.toOwnedSlice(alloc),
+        .type_params = owned_tps,
+        .type = type_tree,
+        .is_type = is_type,
+        .doc = doc_text,
         .f = undefined,
+    };
+}
+
+/// docs-mode const values (`const a = 5` with `#*`)
+fn declSpecRaw(alloc: std.mem.Allocator, alias: ast.TypeAlias, doc: ?[]const u8) !FnSpec {
+    var doc_text: []const u8 = "";
+    if (doc) |d| {
+        var doc_buf = std.ArrayList(u8).empty;
+        defer doc_buf.deinit(alloc);
+        try doc_buf.appendSlice(alloc, d);
+        try docFromMarkdown(alloc, &doc_buf);
+        doc_text = try alloc.dupe(u8, std.mem.trimEnd(u8, doc_buf.items, "\n"));
+    } else {
+        doc_text = try alloc.dupe(u8, "");
+    }
+    errdefer alloc.free(doc_text);
+
+    return .{
+        .name = try alloc.dupe(u8, alias.name),
+        .head = .{ .kind = .global },
+        .type_params = &.{},
+        .type = try revo.lang.type_serde.cloneTypeExpr(alloc, alias.type_expr),
+        .is_type = true,
+        .doc = doc_text,
+        .f = undefined,
+    };
+}
+
+/// docs runs over arbitrary user files
+/// : per-file spec failures skip the file
+///   , anything else (OOM etc) aborts
+pub fn skippableForDocs(err: anyerror) bool {
+    return switch (err) {
+        error.IfaceParseFailed,
+        error.IfaceParamNotTyped,
+        error.UnknownMethodTarget,
+        error.BadCoreKey,
+        error.BadDoc,
+        => true,
+        else => false,
     };
 }
 
@@ -603,39 +635,42 @@ pub const PrototypeFn = fn (target: TypeSpec, vm: *revo.VM) anyerror!revo.Data;
 
 pub fn registerAll(
     vm: *revo.VM,
-    groups: []const []const FnSpec,
+    spec_groups: []const []const FnSpec,
     prototype: PrototypeFn,
 ) !void {
-    var module_funcs: std.StringHashMapUnmanaged(std.ArrayList(ModuleEntry)) = .empty;
-    var module_calls: std.StringHashMapUnmanaged(revo.memory.FunctionID) = .empty;
-    var indexers: std.AutoHashMapUnmanaged(TypeSpec, revo.memory.FunctionID) = .empty;
+    // plain names go in the table, `__` keys in its metatable, so new metamethods dont need no new arms anywhere
+    var mod_entries: std.StringHashMapUnmanaged(std.ArrayList(ModEntry)) = .empty;
+    var method_metas: std.AutoHashMapUnmanaged(TypeSpec, std.ArrayList(MetaEntry)) = .empty;
     var global_funcs: std.ArrayList(GlobalEntry) = .empty;
 
     defer {
-        var mit = module_funcs.iterator();
+        var mit = mod_entries.iterator();
         while (mit.next()) |e| e.value_ptr.deinit(vm.runtime.alloc);
-        module_funcs.deinit(vm.runtime.alloc);
-        module_calls.deinit(vm.runtime.alloc);
-        indexers.deinit(vm.runtime.alloc);
+        mod_entries.deinit(vm.runtime.alloc);
+
+        var meit = method_metas.iterator();
+        while (meit.next()) |e| e.value_ptr.deinit(vm.runtime.alloc);
+
+        method_metas.deinit(vm.runtime.alloc);
         global_funcs.deinit(vm.runtime.alloc);
     }
 
-    for (groups) |specs| {
+    for (spec_groups) |specs| {
         for (specs) |spec| {
+            if (spec.is_type) continue;
             const head = spec.head;
             const fn_id = try vm.installHost(spec.name, spec.f);
             switch (head.kind) {
                 .global => try global_funcs.append(vm.runtime.alloc, .{ .name = spec.name, .fn_id = fn_id }),
                 .module => {
-                    if (spec.core_key == .__call) {
-                        try module_calls.put(vm.runtime.alloc, head.module.?, fn_id);
-                    } else {
-                        const gop = try module_funcs.getOrPutValue(vm.runtime.alloc, head.module.?, .empty);
-                        try gop.value_ptr.append(vm.runtime.alloc, .{ .name = spec.name, .fn_id = fn_id });
-                    }
+                    const gop = try mod_entries.getOrPutValue(vm.runtime.alloc, head.module.?, .empty);
+                    try gop.value_ptr.append(vm.runtime.alloc, .{ .name = spec.name, .atom = coreKey(&spec), .fn_id = fn_id });
                 },
-                .method => if (spec.core_key == .__index) {
-                    try indexers.put(vm.runtime.alloc, head.target.?, fn_id);
+                // the target module table IS the metatable
+                // , so any key lands there directly
+                .method => if (coreKey(&spec)) |atom| {
+                    const gop = try method_metas.getOrPutValue(vm.runtime.alloc, head.target.?, .empty);
+                    try gop.value_ptr.append(vm.runtime.alloc, .{ .atom = atom, .fn_id = fn_id });
                 } else {
                     return error.SpecMethodUnplaceable;
                 },
@@ -646,29 +681,35 @@ pub fn registerAll(
     for (global_funcs.items) |gf| try vm.registerGlobal(gf.name, gf.fn_id);
 
     {
-        var it = module_funcs.iterator();
+        var it = mod_entries.iterator();
         while (it.next()) |entry| {
             const table_id = try vm.ensureModule(entry.key_ptr.*);
-            for (entry.value_ptr.items) |f| try vm.putInTable(table_id, f.name, f.fn_id);
-
-            if (module_calls.get(entry.key_ptr.*)) |call_fn_id| {
+            var has_meta = false;
+            for (entry.value_ptr.items) |f| {
+                if (f.atom != null) {
+                    has_meta = true;
+                } else {
+                    try vm.putInTable(table_id, f.name, f.fn_id);
+                }
+            }
+            if (has_meta) {
                 const mt_id = try vm.tables.create();
-                try vm.putInTableAtom(mt_id, @intFromEnum(revo.core_atoms.__call), call_fn_id);
+                for (entry.value_ptr.items) |f| {
+                    if (f.atom) |atom| try vm.putInTableAtom(mt_id, @intFromEnum(atom), f.fn_id);
+                }
                 try vm.setMetatable(Data.new.table(table_id), mt_id);
             }
         }
     }
 
     {
-        // the type metatable for each primitive iS its module table, so a
-        // dynamic `x:method()` resolves in one `getRaw`. the numeric-indexing
-        // natives are the only `__index` holders and live inside the module
-        // table, keeping the fallback path identical for all four targets
+        // the type metatable for each primitive iS its module table
+        // , so a dynamic `x:method()` dispatch gets a single direct `getRaw`
         const primitives = [_]TypeSpec{ .number, .string, .tuple, .table };
         for (primitives) |target| {
             const module_tid = moduleTableFor(vm, target) orelse continue;
-            if (indexers.get(target)) |fn_id| {
-                try vm.putInTableAtom(module_tid, @intFromEnum(revo.core_atoms.__index), fn_id);
+            if (method_metas.get(target)) |metas| {
+                for (metas.items) |m| try vm.putInTableAtom(module_tid, @intFromEnum(m.atom), m.fn_id);
             }
             try vm.setMetatable(try prototype(target, vm), module_tid);
         }
@@ -677,19 +718,18 @@ pub fn registerAll(
 
 /// the module table for a primitive target, if one is registered
 fn moduleTableFor(vm: *revo.VM, target: TypeSpec) ?revo.memory.TableID {
-    const name = switch (target) {
-        .number => "number",
-        .string => "string",
-        .tuple => "tuple",
-        .table => "table",
-        else => return null,
-    };
+    const name = target.moduleName() orelse return null;
     const val = vm.stdlib_globals.get(vm.internAtom(name) catch return null) orelse return null;
     return val.asTable();
 }
 
-const ModuleEntry = struct {
+const ModEntry = struct {
     name: []const u8,
+    atom: ?revo.core_atoms,
+    fn_id: revo.memory.FunctionID,
+};
+const MetaEntry = struct {
+    atom: revo.core_atoms,
     fn_id: revo.memory.FunctionID,
 };
 const GlobalEntry = struct {
@@ -739,63 +779,162 @@ test "parseGroup round trip: sig, params, doc, variadic, core key" {
 
     const range = specs[0];
     try testing.expectEqualStrings("range", range.name);
-    try testing.expectEqualStrings("iter.range(bound: num, rest: num...) -> function", range.sig);
-    try testing.expectEqual(@as(usize, 2), range.params.len);
-    try testing.expectEqualStrings("bound", range.params[0].name);
-    try testing.expectEqualStrings("num", range.params[0].type_name.?.kind.named);
-    try testing.expectEqualStrings("rest", range.params[1].name);
-    try testing.expect(range.params[1].variadic);
-    try testing.expectEqualStrings("num", range.params[1].type_name.?.kind.named);
-    try testing.expect(range.variadic);
+    {
+        const sig = try renderAlloc(testing.allocator, range);
+        defer testing.allocator.free(sig);
+        try testing.expectEqualStrings("iter.range(bound: num, rest: num...) -> function", sig);
+    }
+    try testing.expectEqual(@as(usize, 2), range.type.kind.function.params.len);
+    try testing.expectEqualStrings("bound", range.type.kind.function.params[0].name);
+    try testing.expectEqualStrings("num", range.type.kind.function.params[0].type_name.?.kind.named);
+    try testing.expectEqualStrings("rest", range.type.kind.function.params[1].name);
+    try testing.expect(range.type.kind.function.params[1].variadic);
+    try testing.expectEqualStrings("num", range.type.kind.function.params[1].type_name.?.kind.named);
+    try testing.expect(isVariadic(&range));
     try testing.expectEqualStrings("single-line doc", range.doc);
 
     const idx = specs[1];
     try testing.expectEqualStrings("__index", idx.name);
-    try testing.expectEqual(revo.core_atoms.__index, idx.core_key.?);
+    try testing.expectEqual(revo.core_atoms.__index, coreKey(&idx).?);
     try testing.expectEqualStrings("finds first occurrence\nwith a second line", idx.doc);
 
     const call = specs[2];
-    try testing.expectEqualStrings("num.__call(value: any) -> num", call.sig);
-    try testing.expectEqual(revo.core_atoms.__call, call.core_key.?);
+    {
+        const sig = try renderAlloc(testing.allocator, call);
+        defer testing.allocator.free(sig);
+        try testing.expectEqualStrings("num.__call(value: any) -> num", sig);
+    }
+    try testing.expectEqual(revo.core_atoms.__call, coreKey(&call).?);
     try testing.expectEqualStrings("converts value\n\nfizz(1) => 2", call.doc);
 
     const unwrap_err = specs[3];
-    try testing.expectEqualStrings("tuple.unwrap_err[T](self: (:err, T)) -> T", unwrap_err.sig);
+    {
+        const sig = try renderAlloc(testing.allocator, unwrap_err);
+        defer testing.allocator.free(sig);
+        try testing.expectEqualStrings("tuple.unwrap_err[T](self: (:err, T)) -> T", sig);
+    }
     try testing.expectEqualStrings("unwrap_err", unwrap_err.name);
     var ubuf = std.Io.Writer.Allocating.init(testing.allocator);
     defer ubuf.deinit();
-    try revo.lang.type_serde.printTypeExpr(unwrap_err.params[0].type_name.?, &ubuf.writer);
+    try revo.lang.type_serde.printTypeExpr(unwrap_err.type.kind.function.params[0].type_name.?, &ubuf.writer);
     try testing.expectEqualStrings("(:err, T)", ubuf.written());
     ubuf.clearRetainingCapacity();
-    try revo.lang.type_serde.printTypeExpr(unwrap_err.ret.?, &ubuf.writer);
+    try revo.lang.type_serde.printTypeExpr(unwrap_err.type.kind.function.return_type.?, &ubuf.writer);
     try testing.expectEqualStrings("T", ubuf.written());
-    try testing.expect(!unwrap_err.variadic);
+    try testing.expect(!isVariadic(&unwrap_err));
 
     const debug = specs[4];
-    try testing.expectEqualStrings("debug() -> table", debug.sig);
-    try testing.expectEqual(@as(usize, 0), debug.params.len);
+    {
+        const sig = try renderAlloc(testing.allocator, debug);
+        defer testing.allocator.free(sig);
+        try testing.expectEqualStrings("debug() -> table", sig);
+    }
+    try testing.expectEqual(@as(usize, 0), debug.type.kind.function.params.len);
     try testing.expectEqualStrings("escaped \"quotes\"", debug.doc);
 
     const maybe = specs[5];
-    try testing.expectEqualStrings("maybe(?opts: table...) -> !string", maybe.sig);
-    try testing.expectEqualStrings("opts", maybe.params[0].name);
-    try testing.expect(maybe.params[0].optional);
-    try testing.expect(maybe.params[0].variadic);
-    try testing.expect(maybe.variadic);
+    {
+        const sig = try renderAlloc(testing.allocator, maybe);
+        defer testing.allocator.free(sig);
+        try testing.expectEqualStrings("maybe(?opts: table...) -> !string", sig);
+    }
+    try testing.expectEqualStrings("opts", maybe.type.kind.function.params[0].name);
+    try testing.expect(maybe.type.kind.function.params[0].optional);
+    try testing.expect(maybe.type.kind.function.params[0].variadic);
+    try testing.expect(isVariadic(&maybe));
     var mbuf = std.Io.Writer.Allocating.init(testing.allocator);
     defer mbuf.deinit();
-    try revo.lang.type_serde.printTypeExpr(maybe.params[0].type_name.?, &mbuf.writer);
+    try revo.lang.type_serde.printTypeExpr(maybe.type.kind.function.params[0].type_name.?, &mbuf.writer);
     try testing.expectEqualStrings("table", mbuf.written());
 }
 
+fn renderAlloc(alloc: std.mem.Allocator, spec: FnSpec) ![]const u8 {
+    var buf = std.Io.Writer.Allocating.init(alloc);
+    defer buf.deinit();
+    try renderSignature(&buf.writer, spec);
+    return alloc.dupe(u8, buf.written());
+}
+
+test "parseGroup collects pub type as type-only alias" {
+    const src =
+        \\#* a port number *#
+        \\pub type Port = num
+        \\
+        \\pub declare open = fn(path: string) -> string
+        \\
+        \\#* handler alias over fn type stays a type, not a callable *#
+        \\pub type Handler = fn(x: num) -> num
+        \\
+        \\#* namespaced alias keeps its head with a bare name *#
+        \\pub type uri.Hi = {n: string}
+        \\
+        \\type Private = num
+    ;
+    const specs = try parseGroup(testing.allocator, src);
+    defer {
+        for (specs) |s| s.deinit(testing.allocator);
+        testing.allocator.free(specs);
+    }
+    try testing.expectEqual(@as(usize, 4), specs.len);
+
+    const port = specs[0];
+    try testing.expectEqualStrings("Port", port.name);
+    try testing.expect(port.is_type);
+    var pbuf = std.Io.Writer.Allocating.init(testing.allocator);
+    defer pbuf.deinit();
+    try revo.lang.type_serde.printTypeExpr(port.type, &pbuf.writer);
+    try testing.expectEqualStrings("num", pbuf.written());
+
+    const open = specs[1];
+    try testing.expect(!open.is_type);
+    {
+        const sig = try renderAlloc(testing.allocator, open);
+        defer testing.allocator.free(sig);
+        try testing.expectEqualStrings("open(path: string) -> string", sig);
+    }
+
+    const handler = specs[2];
+    try testing.expectEqualStrings("Handler", handler.name);
+    try testing.expect(handler.is_type);
+    try testing.expect(handler.type.kind == .function);
+
+    const hi = specs[3];
+    try testing.expect(hi.is_type);
+    try testing.expectEqualStrings("Hi", hi.name);
+    try testing.expect(hi.head.kind == .module);
+    try testing.expectEqualStrings("uri", hi.head.module.?);
+    {
+        const sig = try renderAlloc(testing.allocator, hi);
+        defer testing.allocator.free(sig);
+        try testing.expectEqualStrings("uri.Hi", sig);
+    }
+}
+
+test "collectMacroSpans finds pub macros and procs only" {
+    const src =
+        \\pub macro ok?! `(%w:expr)` `%w`
+        \\pub proc uri.asdf!(m) do m end
+        \\macro private! `(%w:expr)` `%w`
+        \\pub declare x = fn() -> num
+    ;
+    const spans = try collectMacroSpans(testing.allocator, src);
+    defer testing.allocator.free(spans);
+    try testing.expectEqual(@as(usize, 2), spans.len);
+    try testing.expect(std.mem.indexOf(u8, src[spans[0].start..spans[0].end], "ok?!") != null);
+    try testing.expect(std.mem.indexOf(u8, src[spans[1].start..spans[1].end], "uri.asdf!") != null);
+}
+
 test "loadAllSpecs pairs every spec with its impl" {
-    const groups = try loadAllSpecs(testing.allocator);
+    const loaded = try loadAllSpecs(testing.allocator);
     var count: usize = 0;
     for (full_specs) |g| for (g) |*s| {
-        try testing.expect(s.sig.len > 0);
+        var sig_buf = std.Io.Writer.Allocating.init(testing.allocator);
+        defer sig_buf.deinit();
+        try renderSignature(&sig_buf.writer, s.*);
+        try testing.expect(sig_buf.written().len > 0);
         count += 1;
     };
     try testing.expect(count > 100);
     try testing.expectEqualStrings("floor", find("floor").?.name);
-    freeLoadedSpecs(testing.allocator, groups);
+    freeLoadedSpecs(testing.allocator, loaded);
 }

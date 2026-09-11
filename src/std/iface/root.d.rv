@@ -66,3 +66,11 @@ pub declare gensym = fn() -> string
 
 #* hashes any value *#
 pub declare hash = fn(val: any) -> num
+
+# result and option predicates, goes into every compilation like an import
+# TODO: do something useful with this
+pub macro ok?! `(%what:expr)` `%what[0] == :ok`
+pub macro err?! `(%what:expr)` `%what[0] == :err`
+pub macro some?! `(%what:expr)` `%what[0] == :some`
+pub macro none?! `(%what:expr)` `%what == :none or %what[0] == :none`
+pub macro print! `(%fmt:str %ARGS(, %arg:expr)*)` `(print(fmt(%fmt %ARGS(, %arg))))`

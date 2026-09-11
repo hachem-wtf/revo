@@ -10,7 +10,6 @@ pub const testing = @import("testing.zig");
 pub const tests = @import("tests.zig");
 pub const Workspace = @import("Workspace.zig");
 
-pub const default_macro_source = pipeline.default_macro_source;
 pub const parse = pipeline.parse;
 pub const expand = pipeline.expand;
 pub const lower = pipeline.lower;

@@ -2434,6 +2434,71 @@ test "declare rejects non-top-level placement" {
     , .ParseError);
 }
 
+test "dotted pub type resolves bare in the same file" {
+    try t.topNumber(
+        \\ pub type geo.Port = num
+        \\ const p: Port = 8080
+        \\ p
+    , 8080);
+}
+
+test "dotted pub type in .d.rv resolves qualified by import" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "shapes.d.rv",
+        .data = "pub type geo.Point = num\n",
+    });
+    const module_dir = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(module_dir);
+    try t.topNumberInDir(
+        module_dir,
+        "import \"shapes.d.rv\"\nconst p: shapes.Point = 7\np\n",
+        7,
+    );
+    try t.expectCompileErrorInDir(
+        module_dir,
+        "import \"shapes.d.rv\"\nconst p: shapes.Point = \"x\"\n",
+    );
+}
+
+test "manifest dotted macros rescope under the import name" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "m.d.rv",
+        .data =
+        \\pub macro q.shout! `(%w:expr)` `%w`
+        \\pub proc q.add3!(iter) do
+        \\  let a = iter:next()
+        \\  let b = iter:next()
+        \\  let c = iter:next()
+        \\  {(:binary, :add, (:binary, :add, a, b), c)}
+        \\end
+        ,
+    });
+    const module_dir = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(module_dir);
+    try t.topNumberInDir(
+        module_dir,
+        "import \"m.d.rv\"\nm.shout!(40) + m.add3!(10, 20, 10)\n",
+        80,
+    );
+}
+
+test "stdlib dotted type resolves qualified, unknown qualified errors" {
+    try t.topNumber(
+        \\ const u: uri.Hi = {n = "x"}
+        \\ 1
+    , 1);
+    try t.expectCompileError(
+        \\ const u: uri.Hi = 2
+    , .ParseError);
+    try t.expectCompileError(
+        \\ const u: uri.Bogus = 1
+    , .ParseError);
+}
+
 test ".d.rv import typechecks calls and never executes the file" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();

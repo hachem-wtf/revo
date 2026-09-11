@@ -1,11 +1,3 @@
-pub const default_macro_source =
-    \\macro ok?! `(%what:expr)` `%what[0] == :ok`
-    \\macro err?! `(%what:expr)` `%what[0] == :err`
-    \\macro some?! `(%what:expr)` `%what[0] == :some`
-    \\macro none?! `(%what:expr)` `%what == :none or %what[0] == :none`
-    \\macro print! `(%fmt:str %ARGS(, %arg:expr)*)` `(print(fmt(%fmt %ARGS(, %arg))))`
-;
-
 /// build @exports[:name] = name
 fn buildSetExport(alloc: std.mem.Allocator, span: ast.Span, name: []const u8) !*Node {
     const exports_ref = try allocNode(alloc, span, .{ .ident = "@exports" });
@@ -318,7 +310,10 @@ fn extractPubDefs(node: *Node, prefix: []const u8, alloc: std.mem.Allocator, out
             if (d.pub_) {
                 switch (d.inner.expr) {
                     .macro_expr => |m| {
-                        const qualified = try std.fmt.allocPrint(alloc, "{s}.{s}", .{ prefix, m.name });
+                        // already-scoped names liek `uri.asdf!` rescope under
+                        // the import like bare ones
+                        //  `Port` -> `svc.Port`
+                        const qualified = try std.fmt.allocPrint(alloc, "{s}.{s}", .{ prefix, ast.bareMacroName(m.name) });
                         const cloned = try allocNode(alloc, d.inner.span, .{ .macro_expr = .{
                             .name = qualified,
                             .pattern = m.pattern,
@@ -328,7 +323,7 @@ fn extractPubDefs(node: *Node, prefix: []const u8, alloc: std.mem.Allocator, out
                     },
                     .proc_macro => |pm| {
                         if (std.mem.endsWith(u8, pm.name, "!")) {
-                            const qualified = try std.fmt.allocPrint(alloc, "{s}.{s}", .{ prefix, pm.name });
+                            const qualified = try std.fmt.allocPrint(alloc, "{s}.{s}", .{ prefix, ast.bareMacroName(pm.name) });
                             const proc_node = try allocNode(alloc, d.inner.span, .{ .proc_macro = .{
                                 .name = qualified,
                                 .param = .{ .name = pm.param.name, .name_span = pm.param.name_span },
@@ -410,7 +405,7 @@ pub fn build(vm: *VM, source: Source, opts: BuildOptions) !BuildResult {
     }
 
     var parsed = switch (try parse(arena.allocator(), source, .{
-        .include_default_macros = opts.include_default_macros,
+        .include_stdlib_macros = opts.include_stdlib_macros,
     })) {
         .ok => |ok| ok,
         .err => |failure| {
@@ -534,7 +529,7 @@ pub const Source = struct {
 };
 
 pub const ParseOptions = struct {
-    include_default_macros: bool = false,
+    include_stdlib_macros: bool = false,
 };
 
 pub const LowerOptions = struct {
@@ -548,7 +543,7 @@ pub const RunMode = enum {
 };
 
 pub const BuildOptions = struct {
-    include_default_macros: bool = true,
+    include_stdlib_macros: bool = true,
     install_debug_info: bool = true,
     test_mode: bool = false,
     mode: RunMode = .script,
@@ -682,7 +677,7 @@ pub const LowerResult = Result(Artifact, compiler.LowerFailure);
 pub const BuildResult = Result(Artifact, Error);
 
 pub fn parse(allocator: std.mem.Allocator, source: Source, opts: ParseOptions) !ParseResult {
-    if (!opts.include_default_macros) {
+    if (!opts.include_stdlib_macros) {
         return switch (try parseSourceReport(allocator, source.text)) {
             .ok => |expr| .{ .ok = .{ .root = expr } },
             .err => |failure| blk: {
@@ -693,11 +688,18 @@ pub fn parse(allocator: std.mem.Allocator, source: Source, opts: ParseOptions) !
         };
     }
 
-    const defaults: ParseResult = switch (try parseSourceReport(allocator, default_macro_source)) {
-        .ok => |root| .{ .ok = .{ .root = root } },
-        .err => |failure| .{ .err = failure },
-    };
-    if (defaults == .err) return .{ .err = defaults.err };
+    // manifest macros replace the old fixed prelude: same merge shape,
+    // authority lives in iface/*.d.rv instead of a lang-side string.
+    // the list is permanent like full_specs, never freed.
+    const macro_srcs = try revo.std_lib.api.macroSources(allocator);
+    var preludes = try std.ArrayList(*Node).initCapacity(allocator, macro_srcs.len);
+    defer preludes.deinit(allocator);
+    for (macro_srcs) |src| {
+        switch (try parseSourceReport(allocator, src)) {
+            .ok => |root| try preludes.append(allocator, root),
+            .err => |failure| return .{ .err = failure },
+        }
+    }
     const user: ParseResult = switch (try parseSourceReport(allocator, source.text)) {
         .ok => |root| .{ .ok = .{ .root = root } },
         .err => |failure| blk: {
@@ -707,7 +709,7 @@ pub fn parse(allocator: std.mem.Allocator, source: Source, opts: ParseOptions) !
         },
     };
     if (user == .err) return .{ .err = user.err };
-    return .{ .ok = .{ .root = try mergeWithDefaults(allocator, defaults.ok.root, user.ok.root) } };
+    return .{ .ok = .{ .root = try mergeWithPreludes(allocator, preludes.items, user.ok.root) } };
 }
 
 pub fn expand(allocator: std.mem.Allocator, parsed: Parsed) !ExpandResult {
@@ -872,11 +874,17 @@ pub fn parseSourceReport(allocator: std.mem.Allocator, source: []const u8) !pars
     return parser.parseTokensReport(allocator, tokens);
 }
 
-pub fn mergeWithDefaults(allocator: std.mem.Allocator, defaults: *Node, user: *Node) !*Node {
+/// flat merge of prelude roots before user code: one shared scope, so
+/// later definitions win on redeclaration
+fn mergeWithPreludes(allocator: std.mem.Allocator, preludes: []const *Node, user: *Node) !*Node {
     var items = try std.ArrayList(*Node).initCapacity(allocator, 8);
-    switch (defaults.expr) {
-        .block => |block| try items.appendSlice(allocator, block),
-        else => try items.append(allocator, defaults),
+    var span = user.span;
+    for (preludes) |pre| {
+        span = ast.Span.merge(span, pre.span);
+        switch (pre.expr) {
+            .block => |block| try items.appendSlice(allocator, block),
+            else => try items.append(allocator, pre),
+        }
     }
     switch (user.expr) {
         .block => |block| {
@@ -888,7 +896,6 @@ pub fn mergeWithDefaults(allocator: std.mem.Allocator, defaults: *Node, user: *N
         },
         else => try items.append(allocator, user),
     }
-    const span = ast.Span.merge(defaults.span, user.span);
     const node = try allocator.create(Node);
     node.* = .{
         .span = span,

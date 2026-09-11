@@ -300,8 +300,7 @@ pub const Expr = union(enum) {
     type_alias: TypeAlias,
 };
 
-/// `pub declare` alias: name, optional head (`fs.open` module path or
-/// `string:__index` core slot), `[T]` generics, annotated type
+/// `pub declare` / `pub type` alias
 pub const TypeAlias = struct {
     name: []const u8,
     name_span: Span,
@@ -310,6 +309,24 @@ pub const TypeAlias = struct {
     declare_head: ?DeclareHead = null,
     declare_tps: []const []const u8 = &.{},
 };
+
+/// bare member of a possibly-dotted macro name: `uri.asdf!` -> `asdf!`
+pub fn bareMacroName(name: []const u8) []const u8 {
+    if (std.mem.lastIndexOfScalar(u8, name, '.')) |i| return name[i + 1 ..];
+    return name;
+}
+
+/// member name of an alias: last head segment when headed, else the name
+/// `uri.Hi` -> `Hi`, `Port` -> `Port`
+/// . single source for every keying site so that we get
+///     dotted aliases to resolve the same everywhere
+pub fn bareName(t: TypeAlias) []const u8 {
+    if (t.declare_head) |dh| switch (dh) {
+        .module => |segs| return segs[segs.len - 1],
+        .core => |c| return c.key,
+    };
+    return t.name;
+}
 
 /// a declare's name may name a target instead of a plain ident:
 /// `fs.open`, `string:__index`, or a plain ident (`.`/head = null)
@@ -1298,6 +1315,8 @@ pub fn walkExpr(
             .name_span = v.name_span,
             .type_expr = v.type_expr,
             .doc = v.doc,
+            .declare_head = v.declare_head,
+            .declare_tps = v.declare_tps,
         } }),
         else => expr,
     };

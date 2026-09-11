@@ -5,3 +5,5 @@ pub declare uri.decode = fn(value: string) -> !table
 
 #* formats uri table as string *#
 pub declare uri.encode = fn(value: table) -> !string
+
+pub type uri.Hi = {n: string}

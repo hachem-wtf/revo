@@ -923,11 +923,20 @@ fn parseDecl(self: *Parser, start: Token) anyerror!*Node {
         },
         .kw_type => blk: {
             if (!self.check(.ident)) return error.UnexpectedToken;
-            const name = try self.expectIdent();
+            const first = try self.expectIdent();
+            const hh = try self.parseDeclareHead(first, false);
+
             _ = try self.expect(.assign);
             const type_expr = try self.parseTypeExpr();
+
             const node = try self.allocExpr(Span.merge(start.span(), type_expr.span), .{
-                .type_alias = .{ .name = name.text, .name_span = name.span(), .type_expr = type_expr },
+                .type_alias = .{
+                    .name = first.text,
+                    .name_span = first.span(),
+                    .type_expr = type_expr,
+                    .declare_head = hh.head,
+                    .declare_tps = hh.tps,
+                },
             });
             break :blk self.allocExpr(
                 start.span(),
@@ -941,36 +950,18 @@ fn parseDecl(self: *Parser, start: Token) anyerror!*Node {
                 else => return error.UnexpectedToken,
             };
             const first = self.advance();
-            const name = first.text;
-            var head: ?ast.DeclareHead = null;
-            if (self.check(.hash)) {
-                // `string:__index` - the lexer merges `:` + key into one hash
-                const key = self.advance();
-                head = .{ .core = .{ .target = first.text, .key = key.text[1..] } };
-            } else if (self.match(.colon)) {
-                // `string:__index` - a core-key slot on a target type
-                const key = try self.expectIdent();
-                head = .{ .core = .{ .target = first.text, .key = key.text } };
-            } else if (self.check(.dot)) {
-                // `fs.open`, `math.pi` - a dotted module path
-                var segs = std.ArrayList([]const u8).initCapacity(self.alloc, 2) catch return error.OutOfMemory;
-                try segs.append(self.alloc, first.text);
-                while (self.match(.dot)) {
-                    const seg = try self.expectIdent();
-                    try segs.append(self.alloc, seg.text);
-                }
-                head = .{ .module = try segs.toOwnedSlice(self.alloc) };
-            }
-            const tps = if (self.match(.lbracket)) try self.parseTypeParamList() else &.{};
+            const hh = try self.parseDeclareHead(first, true);
+
             _ = try self.expect(.assign);
             const type_expr = try self.parseTypeExpr();
+
             const node = try self.allocExpr(Span.merge(start.span(), type_expr.span), .{
                 .type_alias = .{
-                    .name = name,
+                    .name = first.text,
                     .name_span = first.span(),
                     .type_expr = type_expr,
-                    .declare_head = head,
-                    .declare_tps = tps,
+                    .declare_head = hh.head,
+                    .declare_tps = hh.tps,
                 },
             });
             break :blk self.allocExpr(
@@ -981,6 +972,40 @@ fn parseDecl(self: *Parser, start: Token) anyerror!*Node {
         },
         else => return error.UnexpectedToken,
     };
+}
+
+/// shared `Name`, `Target:key`, `a.b.c`, `[T]`, etc. for `declare` and `type`
+///   so that dotted type heads parse identically
+///
+/// `allow_core` is false for `type`:: metatable slots are values, not types.
+fn parseDeclareHead(self: *Parser, first: Token, allow_core: bool) !struct { head: ?ast.DeclareHead, tps: []const []const u8 } {
+    // peek first so a rejected core head leaves no partial consumption
+    if (!allow_core and (self.check(.hash) or self.check(.colon))) return error.UnexpectedToken;
+    var head: ?ast.DeclareHead = null;
+    if (self.check(.hash)) {
+        // `string:__index`
+        //   the lexer merges `:` + key into one hash
+        const key = self.advance();
+        head = .{ .core = .{ .target = first.text, .key = key.text[1..] } };
+    } else if (self.match(.colon)) {
+        // `string:__index`
+        //   a core-key slot on a target type
+        const key = try self.expectIdent();
+        head = .{ .core = .{ .target = first.text, .key = key.text } };
+    } else if (self.check(.dot)) {
+        // `fs.open`, `uri.Hi`
+        //   a dotted module path
+        var segs = std.ArrayList([]const u8).initCapacity(self.alloc, 2) catch return error.OutOfMemory;
+        try segs.append(self.alloc, first.text);
+        while (self.match(.dot)) {
+            const seg = try self.expectIdent();
+            try segs.append(self.alloc, seg.text);
+        }
+
+        head = .{ .module = try segs.toOwnedSlice(self.alloc) };
+    }
+    const tps = if (self.match(.lbracket)) try self.parseTypeParamList() else &.{};
+    return .{ .head = head, .tps = tps };
 }
 
 fn parseOptionalLabel(self: *Parser) ?[]const u8 {
@@ -1282,13 +1307,28 @@ fn parseQuasiquote(self: *Parser, token: Token) anyerror!*Node {
 }
 
 /// macro name! `pattern` `template`
+/// `name!` or single-scoped `mod.name!`; deeper nesting cant expand
+/// (calls only resolve one field level)
+/// , core slots are values not macros
+fn parseMacroHead(self: *Parser, first: Token) ![]const u8 {
+    if (self.check(.hash) or self.check(.colon)) return error.UnexpectedToken;
+    if (!self.match(.dot)) return first.text;
+    const seg = try self.expectIdent();
+
+    if (self.check(.dot)) return error.UnexpectedToken;
+    return try std.mem.join(self.alloc, ".", &.{ first.text, seg.text });
+}
+
 fn parseMacro(self: *Parser, start: Token) anyerror!*Node {
-    const name = try self.expect(.ident);
-    if (!std.mem.endsWith(u8, name.text, "!")) return error.InvalidMacroName;
+    if (!self.check(.ident)) return error.UnexpectedToken;
+    const name = try self.parseMacroHead(self.advance());
+    if (!std.mem.endsWith(u8, name, "!")) return error.InvalidMacroName;
+
     const pattern = try self.expect(.backtick_string);
     const template = try self.expect(.backtick_string);
+
     return self.allocExpr(Span.merge(start.span(), template.span()), .{ .macro_expr = .{
-        .name = name.text,
+        .name = name,
         .pattern = pattern.text,
         .template = template.text,
     } });
@@ -1300,7 +1340,8 @@ fn parseProc(self: *Parser, start: Token) anyerror!*Node {
     // check if this is a named function definition
     if (!self.check(.ident)) return error.AnonProc;
     const first_ident = self.advance();
-    if (!std.mem.endsWith(u8, first_ident.text, "!")) return error.InvalidProcName;
+    const macro_name = try self.parseMacroHead(first_ident);
+    if (!std.mem.endsWith(u8, macro_name, "!")) return error.InvalidProcName;
 
     if (self.check(.lparen)) {
         _ = try self.expect(.lparen);
@@ -1311,10 +1352,10 @@ fn parseProc(self: *Parser, start: Token) anyerror!*Node {
         const body = try self.parseExpression(0);
 
         return try self.allocExpr(Span.merge(start.span(), body.span), .{
-            .proc_macro = .{ .param = param, .body = body, .name = first_ident.text },
+            .proc_macro = .{ .param = param, .body = body, .name = macro_name },
         });
     }
-    // neither colon, dot, nor lparen
+
     return error.UnexpectedToken;
 }
 
@@ -2123,6 +2164,11 @@ pub const testing = struct {
 
         try std.testing.expectEqualStrings(expected, rendered);
     }
+
+    pub fn parseOne(alloc: std.mem.Allocator, source: []const u8) !*Node {
+        const tokens = try lexer.lexAt(alloc, source, .{});
+        return parseTokens(alloc, tokens);
+    }
 };
 
 test "parses string interpolation as fmt calls" {
@@ -2458,4 +2504,38 @@ test "parses repeated paren calls" {
     try testing.expectPrinted("f()()", "(call (call f))");
     try testing.expectPrinted("f()()()", "(call (call (call f)))");
     try testing.expectPrinted("f()()()()", "(call (call (call (call f))))");
+}
+
+test "dotted heads" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const typed = try testing.parseOne(alloc, "pub type uri.Hi[T] = {n: T}");
+    try std.testing.expect(typed.expr.decl.kind == .type_alias_decl);
+    const alias = typed.expr.decl.inner.expr.type_alias;
+    try std.testing.expectEqualStrings("uri", alias.name);
+    try std.testing.expectEqualStrings("Hi", ast.bareName(alias));
+    try std.testing.expectEqual(@as(usize, 1), alias.declare_tps.len);
+    try std.testing.expectEqualStrings("T", alias.declare_tps[0]);
+    const segs = alias.declare_head.?.module;
+    try std.testing.expectEqual(@as(usize, 2), segs.len);
+    try std.testing.expectEqualStrings("uri", segs[0]);
+    try std.testing.expectEqualStrings("Hi", segs[1]);
+
+    const macro_root = try testing.parseOne(alloc, "pub macro uri.shout! `(%w:expr)` `%w`");
+    try std.testing.expectEqualStrings("uri.shout!", macro_root.expr.decl.inner.expr.macro_expr.name);
+
+    const proc_root = try testing.parseOne(alloc, "pub proc uri.asdf!(m) do m end");
+    try std.testing.expectEqualStrings("uri.asdf!", proc_root.expr.decl.inner.expr.proc_macro.name);
+
+    // they reject core slots & deep paths
+    for ([_][]const u8{
+        "pub type string:foo = num",
+        "pub macro a.b.c! `(%w:expr)` `%w`",
+        "pub macro string:x! `(%w:expr)` `%w`",
+        "pub proc a.b.c!(m) do m end",
+    }) |source| {
+        try std.testing.expectError(error.UnexpectedToken, testing.parseOne(alloc, source));
+    }
 }

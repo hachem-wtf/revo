@@ -40,11 +40,13 @@ pub fn moduleInterface(alloc: std.mem.Allocator, items: []const *ast.Node) !Modu
     defer mctx.stack.deinit(alloc);
     // pre-collect every alias raw (pub or not) so forward references
     // and private bases resolve; only pub names are exported below
+    // keyed by bare name so dotted aliases (`uri.Hi`) resolve as `Hi`
+    // inside the dep, matching api declSpec
     for (items) |item| {
         if (item.expr != .decl) continue;
         const d = item.expr.decl;
         if (d.inner.expr == .type_alias) {
-            try mctx.raws.put(d.inner.expr.type_alias.name, d.inner.expr.type_alias.type_expr);
+            try mctx.raws.put(ast.bareName(d.inner.expr.type_alias), d.inner.expr.type_alias.type_expr);
         }
     }
     var out = try std.ArrayList(types.RecordField).initCapacity(alloc, items.len);
@@ -52,13 +54,17 @@ pub fn moduleInterface(alloc: std.mem.Allocator, items: []const *ast.Node) !Modu
     for (items) |item| try moduleExportInto(&mctx, item, &out);
     var aliases = try std.ArrayList(ModuleAlias).initCapacity(alloc, mctx.raws.count());
     errdefer aliases.deinit(alloc);
+
     for (items) |item| {
         if (item.expr != .decl) continue;
         const d = item.expr.decl;
         if (!d.pub_ or d.inner.expr != .type_alias) continue;
-        const name = d.inner.expr.type_alias.name;
-        if (mctx.resolveTypeAlias(name)) |t| {
-            try aliases.append(alloc, .{ .name = name, .info = t });
+
+        const t = d.inner.expr.type_alias;
+        const name = ast.bareName(t);
+
+        if (mctx.resolveTypeAlias(name)) |ti| {
+            try aliases.append(alloc, .{ .name = name, .info = ti });
         }
     }
     if (out.items.len == 0) return .{ .record = null, .aliases = try aliases.toOwnedSlice(alloc) };

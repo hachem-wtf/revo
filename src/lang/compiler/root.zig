@@ -915,7 +915,7 @@ pub const Compiler = struct {
                 const type_info = type_serde.evalTypeExpr(self, t.type_expr) catch |err| switch (err) {
                     error.OutOfMemory => return error.OutOfMemory,
                 };
-                try self.type_aliases.put(t.name, type_info);
+                try self.type_aliases.put(ast.bareName(t), type_info);
                 try self.pushNil();
             },
             .macro_expr => return self.fail(

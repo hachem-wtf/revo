@@ -451,7 +451,7 @@ pub fn analyzeDetailed(
         .name = snap.name,
         .text = snap.text,
     }, .{
-        .include_default_macros = opts.include_default_macros,
+        .include_stdlib_macros = opts.include_stdlib_macros,
     });
 
     if (parsed == .err) {
@@ -882,13 +882,15 @@ pub fn signatureHelp(
 
     // stdlib fallback: name not bound in any AST
     if (try self.bestLocation(alloc, call_info.name, id, pos, opts) == null) {
-        if (revo.std_lib.api.find(call_info.name)) |spec| {
+        if (revo.std_lib.api.findFn(call_info.name)) |spec| {
+            const ft = spec.type.kind.function;
             const name = try alloc.dupe(u8, spec.name);
             errdefer alloc.free(name);
 
-            const params = try alloc.alloc(ParamInfo, spec.params.len);
+            const params = try alloc.alloc(ParamInfo, ft.params.len);
             errdefer alloc.free(params);
-            for (spec.params, 0..) |p, i| {
+
+            for (ft.params, 0..) |p, i| {
                 // evalTypeExpr can return shared comptime sentinels
                 const pt: ?types.TypeInfo = if (p.type_name) |tn| pt: {
                     const t = try type_serde.evalTypeExpr(type_serde.BareCtx{ .alloc = alloc }, tn);
@@ -900,7 +902,7 @@ pub fn signatureHelp(
                 };
             }
 
-            const ret: ?types.TypeInfo = if (spec.ret) |r| ret: {
+            const ret: ?types.TypeInfo = if (ft.return_type) |r| ret: {
                 const t = try type_serde.evalTypeExpr(type_serde.BareCtx{ .alloc = alloc }, r);
                 break :ret try types.clone(t, alloc);
             } else null;
@@ -1006,15 +1008,20 @@ pub fn inspectDetailed(
     var arena = std.heap.ArenaAllocator.init(self.alloc);
     defer arena.deinit();
 
-    // analysis never merges prelude macros: their spans point into the
-    // defaults source, so they'd surface as bogus symbols/hovers with
-    // wrong lines (expansion and lowering keep merging; completions get
-    // a static prelude list instead)
+    //
+    // analysis never merges manifest macros
+    //
+    //   their spans point into the embedded sources,
+    //   so theyd comw up as weird symbols/hovers with
+    //   wrong lines
+    //      (expansion and lowering keep merging; completions
+    //      derive the names from the same manifest sources instead)
+    //
     const parsed = try lang.parse(arena.allocator(), .{
         .name = snap.name,
         .text = snap.text,
     }, .{
-        .include_default_macros = false,
+        .include_stdlib_macros = false,
     });
 
     if (parsed == .err) {
@@ -1273,9 +1280,10 @@ const ParamHintVisitor = struct {
                 return out.toOwnedSlice(self.alloc) catch &.{};
             }
         }
-        if (revo.std_lib.api.find(name)) |spec| {
+
+        if (revo.std_lib.api.findFn(name)) |spec| {
             var out = std.ArrayList([]const u8).empty;
-            for (spec.params) |p| out.append(self.alloc, p.name) catch return &.{};
+            for (spec.type.kind.function.params) |p| out.append(self.alloc, p.name) catch return &.{};
             return out.toOwnedSlice(self.alloc) catch &.{};
         }
         return &.{};
@@ -1567,15 +1575,30 @@ fn symbolsFromDep(self: *Workspace, alloc: std.mem.Allocator, dep_id: FileId) ![
 /// and return the resolved import path (caller frees)
 fn findImportPathForBinding(self: *Workspace, alloc: std.mem.Allocator, file_id: FileId, name: []const u8) ?[]const u8 {
     const snap = self.snapshot(file_id) orelse return null;
-    const parsed = lang.parseSourceReport(alloc, snap.text) catch return null;
-    const root = switch (parsed) {
-        .ok => |n| n,
-        .err => return null,
-    };
+    // the buffer usually ends mid-access (`mod.<cursor>`)
+    //   , which never parses
+    //     : retry once without the last line, where imports live
+    const texts: [2][]const u8 = .{ snap.text, stripLastLine(snap.text) };
+    for (texts) |text| {
+        const parsed = lang.parseSourceReport(alloc, text) catch continue;
+        const root = switch (parsed) {
+            .ok => |n| n,
+            .err => continue,
+        };
+        defer alloc.destroy(root);
+        const result = FindImportVisitor.find(root, name) orelse continue;
+        return alloc.dupe(u8, result) catch null;
+    }
+    return null;
+}
 
-    defer alloc.destroy(root);
-    const result = FindImportVisitor.find(root, name) orelse return null;
-    return alloc.dupe(u8, result) catch null;
+/// text before the final newline
+/// : the in-progress line cannot parse
+///   , so dep lookups during completion ignore it
+fn stripLastLine(text: []const u8) []const u8 {
+    const trimmed = std.mem.trimEnd(u8, text, "\r\n");
+    const idx = std.mem.lastIndexOfScalar(u8, trimmed, '\n') orelse return "";
+    return trimmed[0..idx];
 }
 
 const FindImportVisitor = struct {
@@ -1855,7 +1878,37 @@ fn collectDependencyClosure(
     }
 }
 
-/// walk AST and collect bindings, functions, type aliases
+///
+/// walk ast & collect
+///     bindings, functions, type aliases
+///
+/// full dotted macro names from stdlib manifests
+///     (`uri.asdf!`, `ok?!`)
+///
+/// names borrow the embedded sources (static)
+/// ; only the list is owned
+/// . callers split scope from member
+/// ; the parser caps heads at one dot.
+///
+fn stdlibMacroNames(self: *Workspace, arena: std.mem.Allocator) [][]const u8 {
+    var out = std.ArrayList([]const u8).empty;
+    const srcs = revo.std_lib.api.macroSources(arena) catch return out.items;
+
+    for (srcs) |src| {
+        const parsed = lang.parse(arena, .{ .name = "<stdlib-macros>", .text = src }, .{ .include_stdlib_macros = false }) catch continue;
+        if (parsed != .ok) continue;
+        const syms = self.collectSymbolsFromParsed(parsed.ok.root, src) catch continue;
+        defer freeSymbols(self.alloc, @constCast(syms));
+
+        for (syms) |sym| {
+            if (sym.kind != .macro) continue;
+            const owned = arena.dupe(u8, sym.name) catch return out.items;
+            out.append(arena, owned) catch return out.items;
+        }
+    }
+    return out.items;
+}
+
 fn collectSymbolsFromParsed(self: *Workspace, root: *lang.Node, text: []const u8) ![]Symbol {
     var out = try std.ArrayList(Symbol).initCapacity(self.alloc, 8);
     errdefer out.deinit(self.alloc);
@@ -2452,11 +2505,14 @@ const SymbolVisitor = struct {
         switch (node.expr) {
             .binding => |b| self.addBinding(b),
             .fn_expr => |f| for (f.params) |p| self.addName(p.name, .param, p.name_span),
-            .type_alias => |t| self.addName(t.name, .type_alias, t.name_span),
-            // proc and template macros share the kind; node span lands
-            // on the decl start (neither carries a name span)
-            .proc_macro => |pm| self.addName(pm.name, .macro, node.span),
-            .macro_expr => |m| self.addName(m.name, .macro, node.span),
+            .type_alias => |t| self.addName(lang.ast.bareName(t), .type_alias, t.name_span),
+            // proc and template macros share the kind
+            // ; node span lands on the decl start
+            //   (neither carries a name span)
+            // . bare member names, like type aliases: `q.macc!`
+            //   in a dep file completes as `macc!` under import name
+            .proc_macro => |pm| self.addName(lang.ast.bareMacroName(pm.name), .macro, node.span),
+            .macro_expr => |m| self.addName(lang.ast.bareMacroName(m.name), .macro, node.span),
             .import_stmt => |is| {
                 if (self.import_named) {
                     self.import_named = false;
@@ -2919,19 +2975,27 @@ fn addFieldCompletions(
     dot_pos: usize,
 ) !void {
     const target_atom = vm.internAtom(target) catch return;
-    // stdlib modules registered as globals (string, table, math, etc.)
+    // stdlib modules registered as globals
+    //   (string, table, math, etc.)
+    //
+    // : the module is its runtime table PLUS its declared surface
+    // , so type-only aliases
+    //      (never runtime values)
+    //   complete here too
     if (vm.globals.get(target_atom)) |val| {
         if (val.tag() == .table) {
             const table = try vm.tables.get(val.asTable().?);
             var hash_it = table.hash.orderedIterator();
+
             while (hash_it.next()) |entry| {
                 if (entry.key.tag() == .atom) {
                     const name = vm.stringValue(entry.key.asAtom().?);
                     if (std.mem.startsWith(u8, name, prefix)) {
                         var doc: ?[]const u8 = null;
-                        if (revo.std_lib.api.find(name)) |spec| {
+                        if (revo.std_lib.api.findFn(name)) |spec| {
                             if (spec.doc.len > 0) doc = spec.doc;
                         }
+
                         items.append(arena, .{
                             .label = name,
                             .kind = .field,
@@ -2939,6 +3003,50 @@ fn addFieldCompletions(
                         }) catch return;
                     }
                 }
+            }
+            // declared members the runtime table cannot hold
+            // : aliases and any fn missing at runtime
+            // . `__` keys stay out
+            // , they are not field accesses
+            for (revo.std_lib.api.full_specs) |group| {
+                for (group) |*spec| {
+                    if (spec.head.kind != .module) continue;
+                    if (!std.mem.eql(u8, spec.head.module.?, target)) continue;
+                    if (std.mem.startsWith(u8, spec.name, "__")) continue;
+                    if (!std.mem.startsWith(u8, spec.name, prefix)) continue;
+                    var seen = false;
+
+                    for (items.items) |it| {
+                        if (std.mem.eql(u8, it.label, spec.name)) {
+                            seen = true;
+                            break;
+                        }
+                    }
+                    if (seen) continue;
+
+                    items.append(arena, .{
+                        .label = spec.name,
+                        .kind = if (spec.is_type) .class else .field,
+                        .documentation = if (spec.doc.len > 0) spec.doc else null,
+                    }) catch return;
+                }
+            }
+            // manifest macros scoped to this module (`uri.asdf!`
+            // completes as `asdf!` under `uri.`); globals complete bare
+            // above, never qualified
+            for (self.stdlibMacroNames(arena)) |name| {
+                if (!std.mem.startsWith(u8, name, target)) continue;
+
+                const rest = name[target.len..];
+                if (rest.len < 2 or rest[0] != '.') continue;
+
+                const member = rest[1..];
+                if (!std.mem.startsWith(u8, member, prefix)) continue;
+
+                items.append(arena, .{
+                    .label = member,
+                    .kind = .function,
+                }) catch return;
             }
             return;
         }
@@ -2975,13 +3083,26 @@ fn addGeneralCompletions(
         }
     }
 
-    // prelude macros (mirrors default_macro_source; analysis parses
-    // without them so they need explicit completion entries)
-    for ([_][]const u8{ "ok?!", "err?!", "some?!", "none?!", "print!" }) |name| {
-        if (std.mem.startsWith(u8, name, prefix)) {
-            items.append(arena, .{ .label = name, .kind = .function }) catch return;
-        }
+    // manifest macros
+    // , derived from the same sources the build merges
+    //   (analysis parses without them by design, so names come from here
+    //      instead of the inspect cache
+    //      ; a few dozen lines per request is
+    //      noise next to the semantic pass below)
+    // . dotted names stay scoped
+    //   : only bare macros complete bare
+    for (self.stdlibMacroNames(arena)) |name| {
+        if (std.mem.indexOfScalar(u8, name, '.') != null) continue;
+        if (!std.mem.startsWith(u8, name, prefix)) continue;
+        items.append(arena, .{ .label = name, .kind = .function }) catch return;
     }
+
+    // note:
+    //   global type aliases resolve bare but don't complete here yet
+    //   ; no stdlib group declares one, so there is nothing to cover
+    //   . when the first lands, mirror the dot-path union below:
+    //      is_type + global head as .class
+    //        (values keep winning same-named collisions)
 
     // globals from vm (stdlib + user)
     {
@@ -3001,11 +3122,14 @@ fn addGeneralCompletions(
             var doc_copy: ?[]const u8 = null;
 
             if (entry.value_ptr.tag() == .function) {
-                if (revo.std_lib.api.find(name)) |spec| {
+                // findFn skips type-only aliases, so kind is always function
+                if (revo.std_lib.api.findFn(name)) |spec| {
                     doc_copy = if (spec.doc.len > 0) (arena.dupe(u8, spec.doc) catch null) else null;
-                    const names = try arena.alloc([]const u8, spec.params.len);
-                    const param_types = try arena.alloc([]const u8, spec.params.len);
-                    for (spec.params, 0..) |p, i| {
+                    const ft = spec.type.kind.function;
+                    const names = try arena.alloc([]const u8, ft.params.len);
+                    const param_types = try arena.alloc([]const u8, ft.params.len);
+
+                    for (ft.params, 0..) |p, i| {
                         names[i] = p.name;
                         var type_buf = std.Io.Writer.Allocating.init(arena);
                         defer type_buf.deinit();
@@ -3013,18 +3137,20 @@ fn addGeneralCompletions(
                         if (p.variadic) try type_buf.writer.writeAll("...");
                         param_types[i] = try type_buf.toOwnedSlice();
                     }
+
                     const sig = try callSignature(
                         arena,
                         name,
                         names,
                         param_types,
-                        if (spec.ret) |r| blk: {
+                        if (ft.return_type) |r| blk: {
                             var ret_buf = std.Io.Writer.Allocating.init(arena);
                             defer ret_buf.deinit();
                             try type_serde.printTypeExpr(r, &ret_buf.writer);
                             break :blk try ret_buf.toOwnedSlice();
                         } else null,
                     );
+
                     detail = sig.detail;
                     insert_text = sig.insert_text;
                 }
@@ -3233,7 +3359,7 @@ test "workspace query surface" {
     ;
     const id = try ws.open("<test>", source, .{});
     const query_opts: lang.BuildOptions = .{
-        .include_default_macros = false,
+        .include_stdlib_macros = false,
         .install_debug_info = false,
         .test_mode = false,
     };
@@ -3281,7 +3407,7 @@ test "workspace hover shows record field values" {
     ;
     const id = try ws.open("<test>", source, .{});
     const query_opts: lang.BuildOptions = .{
-        .include_default_macros = false,
+        .include_stdlib_macros = false,
         .install_debug_info = false,
         .test_mode = false,
     };
@@ -3297,7 +3423,7 @@ test "workspace hover over lib import manifest" {
     defer arena.deinit();
     const alloc = arena.allocator();
     const query_opts: lang.BuildOptions = .{
-        .include_default_macros = false,
+        .include_stdlib_macros = false,
         .install_debug_info = false,
         .test_mode = true,
     };
@@ -3505,7 +3631,7 @@ test "workspace hover over bare fn definition" {
     defer arena.deinit();
     const alloc = arena.allocator();
     const query_opts: lang.BuildOptions = .{
-        .include_default_macros = false,
+        .include_stdlib_macros = false,
         .install_debug_info = false,
         .test_mode = true,
     };
@@ -3545,4 +3671,91 @@ test "workspace sig map survives typed fn invalidation" {
     try std.testing.expect(p.tag == .table);
     try std.testing.expect(p.tag.table.key == null);
     try std.testing.expect(p.tag.table.value.*.tag == .any);
+}
+
+fn expectCompletion(items: []const Completion, label: []const u8, kind: CompletionKind) !void {
+    for (items) |it| {
+        if (std.mem.eql(u8, it.label, label)) {
+            try std.testing.expectEqual(kind, it.kind);
+            return;
+        }
+    }
+    std.debug.print("missing completion {s}, had:", .{label});
+    for (items) |it| std.debug.print(" [{s}]", .{it.label});
+    std.debug.print("\n", .{});
+    return error.TestUnexpectedResult;
+}
+
+test "stdlib dot completion unions runtime table w declared aliases" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    var vm = try VM.init(.{ .alloc = alloc, .io = std.testing.io, .diag_alloc = alloc });
+    defer vm.deinit();
+    var ws = try Workspace.initWithVm(&vm, alloc);
+    defer ws.deinit();
+
+    const text = "uri.";
+    const id = try ws.open("<test>", text, .{});
+    const items = try ws.completions(arena.allocator(), id, text, text.len);
+    // Hi is type-only: no runtime key, only a declared spec
+    try expectCompletion(items, "Hi", .class);
+    // runtime members still come first without dupes
+    var decodes: usize = 0;
+    for (items) |it| {
+        if (std.mem.eql(u8, it.label, "decode")) decodes += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), decodes);
+}
+
+test "manifest macros complete w/o a hardcoded list" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    var vm = try VM.init(.{ .alloc = alloc, .io = std.testing.io, .diag_alloc = alloc });
+    defer vm.deinit();
+    var ws = try Workspace.initWithVm(&vm, alloc);
+    defer ws.deinit();
+
+    const text = "ok?";
+    const id = try ws.open("<test>", text, .{});
+    const items = try ws.completions(arena.allocator(), id, text, text.len);
+    try expectCompletion(items, "ok?!", .function);
+
+    const text2 = "pr";
+    const id2 = try ws.open("<test2>", text2, .{});
+    const items2 = try ws.completions(arena.allocator(), id2, text2, text2.len);
+    try expectCompletion(items2, "print!", .function);
+    try expectCompletion(items2, "print", .function);
+}
+
+test "imported manifest members complete by bare name" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "shapes.d.rv", .data =
+        \\pub type geo.Point = num
+        \\pub macro geo.macc! `(%w:expr)` `%w`
+    });
+    var dir_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const dir_n = try tmp.dir.realPath(std.testing.io, &dir_buf);
+    const dir_path = dir_buf[0..dir_n];
+
+    var vm = try VM.init(.{ .alloc = alloc, .io = std.testing.io, .diag_alloc = alloc });
+    defer vm.deinit();
+    var ws = try Workspace.initWithVm(&vm, alloc);
+    defer ws.deinit();
+
+    const script = try std.fmt.allocPrint(alloc, "{s}/app.rv", .{dir_path});
+    defer alloc.free(script);
+    const text = "const shapes = import \"shapes.d.rv\"\nshapes.";
+    const id = try ws.open(script, text, .{});
+    const items = try ws.completions(arena.allocator(), id, text, text.len);
+    try expectCompletion(items, "Point", .field);
+    try expectCompletion(items, "macc!", .field);
 }

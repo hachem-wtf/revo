@@ -67,6 +67,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - type-to-string rendering is unified
 - rendered types use spaces
+- internal
+    - `.d.rv` simplified:
+      - can now include type aliases
+      - any `__` key now lands in a metatable automatically
+      - macro prelude killed and put into `root.d.rv`
+
 
 ### Fixed
 

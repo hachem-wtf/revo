@@ -191,15 +191,35 @@ const SemanticChecker = struct {
         for (known_globals) |name| {
             const spec = find_global: {
                 for (revo.std_lib.api.full_specs) |group| for (group) |*s| {
+                    if (s.is_type) continue;
                     if (!std.mem.eql(u8, s.name, name)) continue;
                     if (s.head.kind == .global) break :find_global s;
                 };
-                break :find_global revo.std_lib.api.find(name);
+                break :find_global revo.std_lib.api.findFn(name);
             } orelse continue;
             if (try checker.makeStdlibSig(spec)) |sig| {
                 try checker.scopes.items[checker.scopes.items.len - 1].values.put(name, .{ .info = .{ .tag = .{ .function = sig } } });
             }
         }
+
+        for (revo.std_lib.api.full_specs) |group| {
+            for (group) |*s| {
+                if (!s.is_type) continue;
+                const t = checker.evalCheckedTypeExpr(s.type) catch types_mod.TypeInfo{ .tag = .any };
+                // aliases live where values live
+                // : module heads seed the per-module table
+                //   (`uri.Hi`, docs ride on the spec), bare names seed globals
+                if (s.head.kind == .module) {
+                    const gop = try checker.import_aliases.getOrPut(s.head.module.?);
+                    if (!gop.found_existing) gop.value_ptr.* = std.StringHashMap(types_mod.TypeInfo).init(checker.alloc);
+                    try gop.value_ptr.put(s.name, t);
+                } else {
+                    const entry: Entry = .{ .info = t, .doc = if (s.doc.len > 0) s.doc else null };
+                    try checker.type_aliases.put(s.name, entry);
+                }
+            }
+        }
+
         return checker;
     }
 
@@ -521,6 +541,7 @@ const SemanticChecker = struct {
         {
             const module_name = object.expr.ident;
             for (revo.std_lib.api.full_specs) |group| for (group) |*spec| {
+                if (spec.is_type) continue;
                 if (!std.mem.eql(u8, spec.name, name)) continue;
                 const head = spec.head;
                 if (head.kind == .module and std.mem.eql(u8, head.module.?, module_name)) {
@@ -534,15 +555,17 @@ const SemanticChecker = struct {
     }
 
     fn makeStdlibSig(self: *SemanticChecker, spec: *const revo.std_lib.api.FnSpec) !?*const FnSig {
+        if (spec.is_type) return null;
         if (self.sig_cache.get(spec)) |sig| return sig;
         const saved = self.current_type_params;
         self.current_type_params = spec.type_params;
         defer self.current_type_params = saved;
 
-        var param_types = try std.ArrayList(types_mod.TypeInfo).initCapacity(self.alloc, spec.params.len);
-        var param_names = try std.ArrayList([]const u8).initCapacity(self.alloc, spec.params.len);
+        const ft = spec.type.kind.function;
+        var param_types = try std.ArrayList(types_mod.TypeInfo).initCapacity(self.alloc, ft.params.len);
+        var param_names = try std.ArrayList([]const u8).initCapacity(self.alloc, ft.params.len);
 
-        for (spec.params) |p| {
+        for (ft.params) |p| {
             try param_names.append(self.alloc, p.name);
             try param_types.append(self.alloc, if (p.type_name) |tn| type_serde.evalTypeExpr(self, tn) catch types_mod.TypeInfo{ .tag = .any } else types_mod.TypeInfo{ .tag = .any });
         }
@@ -550,7 +573,10 @@ const SemanticChecker = struct {
         const names_slice = try param_names.toOwnedSlice(self.alloc);
         const types_slice = try param_types.toOwnedSlice(self.alloc);
 
-        const ret = if (spec.ret) |r| type_serde.evalTypeExpr(self, r) catch types_mod.TypeInfo{ .tag = .any } else types_mod.TypeInfo{ .tag = .any };
+        // required comes from the host arity, not the `?` flags: stdlib
+        // spells optionals as nilable unions (`mode: string?`) with variadic
+        // hosts, so flag-derived counts would over-require. keep in sync.
+        const ret = if (ft.return_type) |r| type_serde.evalTypeExpr(self, r) catch types_mod.TypeInfo{ .tag = .any } else types_mod.TypeInfo{ .tag = .any };
         const sig = try types_mod.newSignature(self.alloc, .{
             .param_names = names_slice,
             .params = types_slice,
@@ -866,7 +892,7 @@ const SemanticChecker = struct {
         // vm globals (repl); without them, fall back to the spec registry so
         // bare calls like `print(x)` don't read as unknown
         if (self.lookup(name) == null and !ast.isDiscardName(name) and
-            !(self.fn_nesting > 0 and self.predeclared.contains(name)) and revo.std_lib.api.find(name) == null)
+            !(self.fn_nesting > 0 and self.predeclared.contains(name)) and revo.std_lib.api.findFn(name) == null)
         {
             const msg = try std.fmt.allocPrint(self.alloc, "name `{s}` is not defined", .{name});
             try self.appendError(msg, span, "unknown name");
@@ -923,7 +949,7 @@ const SemanticChecker = struct {
     fn analyzeTypeAlias(self: *SemanticChecker, alias: anytype, doc: ?[]const u8, span: ast.Span) !types_mod.TypeInfo {
         _ = span;
         const t = self.evalCheckedTypeExpr(alias.type_expr) catch types_mod.TypeInfo{ .tag = .any };
-        try self.type_aliases.put(alias.name, .{ .info = t, .doc = doc orelse alias.doc });
+        try self.type_aliases.put(ast.bareName(alias), .{ .info = t, .doc = doc orelse alias.doc });
         return .{ .tag = .any };
     }
 
@@ -1285,14 +1311,15 @@ const SemanticChecker = struct {
                     // same name can exist as both a global and a method
                     // (e.g. `read` vs `file:read`); match the call kind
                     for (revo.std_lib.api.full_specs) |group| for (group) |*s| {
+                        if (s.is_type) continue;
                         if (!std.mem.eql(u8, s.name, name)) continue;
                         const head = s.head;
                         if (call.implicit_self and head.kind == .method) break :find_spec s;
                         if (!call.implicit_self and head.kind == .global) break :find_spec s;
                     };
-                    break :find_spec revo.std_lib.api.find(name);
+                    break :find_spec revo.std_lib.api.findFn(name);
                 };
-                const is_variadic = stdlib_spec != null and stdlib_spec.?.variadic;
+                const is_variadic = if (stdlib_spec) |sp| revo.std_lib.api.isVariadic(sp) else false;
                 if (is_variadic and total_args >= sig.params.len -| 1) {
                     // variadic fns are fine with >= min
                 } else if (total_args < sig.required_count) {
@@ -1483,6 +1510,7 @@ const SemanticChecker = struct {
     fn findMethodByNameAndTarget(name: []const u8, target: revo.std_lib.TypeSpec) ?*const revo.std_lib.api.FnSpec {
         for (revo.std_lib.api.full_specs) |group| {
             for (group) |*spec| {
+                if (spec.is_type) continue;
                 if (!std.mem.eql(u8, spec.name, name)) continue;
                 const head = spec.head;
                 if (head.kind == .method) {
@@ -1494,15 +1522,10 @@ const SemanticChecker = struct {
     }
 
     fn findModuleByNameAndTarget(name: []const u8, target: revo.std_lib.TypeSpec) ?*const revo.std_lib.api.FnSpec {
-        const module_name: []const u8 = switch (target) {
-            .number => "number",
-            .string => "string",
-            .tuple => "tuple",
-            .table => "table",
-            else => return null,
-        };
+        const module_name = target.moduleName() orelse return null;
         for (revo.std_lib.api.full_specs) |group| {
             for (group) |*spec| {
+                if (spec.is_type) continue;
                 if (!std.mem.eql(u8, spec.name, name)) continue;
                 const head = spec.head;
                 if (head.kind == .module and std.mem.eql(u8, head.module.?, module_name)) return spec;

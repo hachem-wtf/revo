@@ -119,15 +119,6 @@ fn sortByName(list: []Planned) void {
     }.less);
 }
 
-/// strips the `Target:` prefix off a method's signature, since it's
-/// kinda useless once the method is alreaday under its types group
-fn stripMethodPrefix(sig: []const u8) []const u8 {
-    const end = std.mem.indexOfScalar(u8, sig, '(') orelse sig.len;
-    const head = sig[0..end];
-    if (std.mem.indexOfScalar(u8, head, ':')) |i| return sig[i + 1 ..];
-    return sig;
-}
-
 pub fn lessStr(_: void, a: []const u8, b: []const u8) bool {
     return std.mem.order(u8, a, b) == .lt;
 }
@@ -268,7 +259,7 @@ fn renderTextGlobals(alloc: std.mem.Allocator, w: *Writer, specs: []*const FnSpe
     try style(w, reset);
     try w.writeAll("\n");
     for (planned.items) |p| {
-        try renderTextFn(w, p.spec, p.spec.sig, 2, 4);
+        try renderTextFn(alloc, w, p.spec, false, 2, 4);
         try renderTextNestedMethods(alloc, w, specs, p.spec.name, 4, 6, consumed);
     }
 }
@@ -306,7 +297,7 @@ fn renderTextModules(alloc: std.mem.Allocator, w: *Writer, specs: []*const FnSpe
         }
 
         for (planned.items) |p| {
-            try renderTextFn(w, p.spec, p.spec.sig, 4, 6);
+            try renderTextFn(alloc, w, p.spec, false, 4, 6);
             try renderTextNestedMethods(alloc, w, specs, p.spec.name, 6, 8, consumed);
         }
     }
@@ -340,7 +331,7 @@ fn renderTextMethods(alloc: std.mem.Allocator, w: *Writer, specs: []*const FnSpe
         try style(w, reset);
         try w.writeAll("\n");
 
-        for (planned.items) |p| try renderTextFn(w, p.spec, stripMethodPrefix(p.spec.sig), 4, 6);
+        for (planned.items) |p| try renderTextFn(alloc, w, p.spec, true, 4, 6);
     }
 }
 
@@ -358,13 +349,21 @@ fn renderTextNestedMethods(
     if (planned.items.len == 0) return;
 
     try consumed.put(alloc, target_name, {});
-    for (planned.items) |p| try renderTextFn(w, p.spec, stripMethodPrefix(p.spec.sig), sig_indent, doc_indent);
+    for (planned.items) |p| try renderTextFn(alloc, w, p.spec, true, sig_indent, doc_indent);
 }
 
-fn renderTextFn(w: *Writer, spec: *const FnSpec, sig: []const u8, sig_indent: usize, doc_indent: usize) !void {
+fn renderTextFn(alloc: std.mem.Allocator, w: *Writer, spec: *const FnSpec, strip_method: bool, sig_indent: usize, doc_indent: usize) !void {
+    var sig_buf = std.Io.Writer.Allocating.init(alloc);
+    defer sig_buf.deinit();
+    if (strip_method) {
+        try api.renderSignatureStripMethod(&sig_buf.writer, spec.*);
+    } else {
+        try api.renderSignature(&sig_buf.writer, spec.*);
+    }
+    const sig = sig_buf.written();
     try w.writeAll("\n");
     try writeIndent(w, sig_indent);
-    if (spec.is_value) {
+    if (spec.is_type) {
         try style(w, cyan);
         try w.print("{s}", .{spec.name});
         try style(w, reset);
@@ -387,7 +386,7 @@ fn renderTextFn(w: *Writer, spec: *const FnSpec, sig: []const u8, sig_indent: us
         try w.writeAll("\n");
     }
 
-    if (spec.core_key) |k| {
+    if (api.coreKey(spec)) |k| {
         try writeIndent(w, doc_indent);
         try style(w, dim);
         try w.writeAll("metatable key: ");
@@ -478,7 +477,7 @@ fn renderHtmlGlobals(alloc: std.mem.Allocator, w: *Writer, specs: []*const FnSpe
     try w.writeAll("<details open>\n");
     try writeIndent(w, 4);
     try w.print("<summary>{d} entries</summary>\n\n", .{planned.items.len});
-    for (planned.items) |p| try renderHtmlFn(w, p, p.spec.sig, 4, alloc, specs, slugs, consumed);
+    for (planned.items) |p| try renderHtmlFn(w, p, false, 4, alloc, specs, slugs, consumed);
     try writeIndent(w, 2);
     try w.writeAll("</details>\n");
 
@@ -567,8 +566,7 @@ fn renderHtmlGroup(
     try writeIndent(w, indent + 4);
     try w.print("<summary>{d} entries</summary>\n\n", .{planned.len});
     for (planned) |p| {
-        const sig = if (strip_prefix) stripMethodPrefix(p.spec.sig) else p.spec.sig;
-        try renderHtmlFn(w, p, sig, indent + 4, alloc, specs, slugs, consumed);
+        try renderHtmlFn(w, p, strip_prefix, indent + 4, alloc, specs, slugs, consumed);
     }
     try writeIndent(w, indent + 2);
     try w.writeAll("</details>\n");
@@ -599,7 +597,7 @@ fn renderHtmlToc(w: *Writer, planned: []const Planned, indent: usize) !void {
 fn renderHtmlFn(
     w: *Writer,
     p: Planned,
-    sig: []const u8,
+    strip_prefix: bool,
     indent: usize,
     alloc: std.mem.Allocator,
     specs: []*const FnSpec,
@@ -615,14 +613,21 @@ fn renderHtmlFn(
 
     try writeHtmlTextBlock(w, indent + 2, "<h4>", "</h4>", spec.name, 0);
 
-    if (spec.is_value) {
+    if (spec.is_type) {
         try writeIndent(w, indent + 2);
         try w.writeAll("<p class=\"marker\">(value)</p>\n\n");
     } else {
-        try writeHtmlTextBlock(w, 0, "<pre class=\"signature\"><code>", "</code></pre>", sig, 0);
+        var sig_buf = std.Io.Writer.Allocating.init(alloc);
+        defer sig_buf.deinit();
+        if (strip_prefix) {
+            try api.renderSignatureStripMethod(&sig_buf.writer, spec.*);
+        } else {
+            try api.renderSignature(&sig_buf.writer, spec.*);
+        }
+        try writeHtmlTextBlock(w, 0, "<pre class=\"signature\"><code>", "</code></pre>", sig_buf.written(), 0);
     }
 
-    if (spec.core_key) |k| {
+    if (api.coreKey(spec)) |k| {
         try writeIndent(w, indent + 2);
         try w.writeAll("<p class=\"metatable-key\">metatable key: <code>");
         try writeHtmlEscaped(w, @tagName(k));
@@ -663,8 +668,7 @@ fn renderHtmlNestedMethods(
     try writeIndent(w, indent + 2);
     try w.writeAll("<h5>methods</h5>\n\n");
     for (planned.items) |p| {
-        const sig = stripMethodPrefix(p.spec.sig);
-        try renderHtmlFn(w, p, sig, indent + 2, alloc, specs, slugs, consumed);
+        try renderHtmlFn(w, p, true, indent + 2, alloc, specs, slugs, consumed);
     }
     try writeIndent(w, indent);
     try w.writeAll("</section>\n\n");
@@ -779,22 +783,14 @@ pub const Cli = struct {
                 return error.FileError;
             };
             const prev = owned.items.len;
-            const mod_doc = addDocsFromSource(gpa, arena, source, owned, flat) catch |err| switch (err) {
-                error.IfaceParseFailed,
-                error.IfaceParamNotTyped,
-                error.IfaceBadBindingTarget,
-                error.IfaceDeclNotAFunction,
-                error.BadCoreKey,
-                error.BadDoc,
-                => blk: {
-                    std.debug.print("skipping {s}: {s}\n", .{ f, @errorName(err) });
-                    break :blk "";
-                },
-                error.LateModuleDoc => blk: {
+            const mod_doc = addDocsFromSource(gpa, arena, source, owned, flat) catch |err| blk: {
+                if (err == error.LateModuleDoc) {
                     std.debug.print("skipping {s}: module doc must be at the start of the file\n", .{f});
                     break :blk "";
-                },
-                else => |e| return e,
+                }
+                if (!api.skippableForDocs(err)) return err;
+                std.debug.print("skipping {s}: {s}\n", .{ f, @errorName(err) });
+                break :blk "";
             };
             if (mod_doc.len > 0) {
                 for (owned.items[prev..]) |file_specs| {
@@ -821,16 +817,22 @@ pub const Cli = struct {
             printError(init, "reading {s} - {}", .{ path, err });
             return error.FileError;
         };
-        return addDocsFromSource(gpa, arena, source, owned, flat) catch |err| switch (err) {
-            error.IfaceParseFailed => {
-                printError(init, "parse error while extracting docs", .{});
-                return error.CompilationError;
-            },
-            error.LateModuleDoc => {
+        return addDocsFromSource(gpa, arena, source, owned, flat) catch |err| {
+            // single file was asked for, so spec failures fail loud instead
+            // of skipping like the directory walk does
+            if (err == error.LateModuleDoc) {
                 printError(init, "module doc must be at the start of the file", .{});
                 return error.CompilationError;
-            },
-            else => |e| return e,
+            }
+            if (err == error.IfaceParseFailed) {
+                printError(init, "parse error while extracting docs", .{});
+                return error.CompilationError;
+            }
+            if (api.skippableForDocs(err)) {
+                printError(init, "cannot document {s}: {s}", .{ path, @errorName(err) });
+                return error.CompilationError;
+            }
+            return err;
         };
     }
 

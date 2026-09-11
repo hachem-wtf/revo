@@ -448,12 +448,14 @@ rejects value rebinding of the name.
 
 ### `.d.rv` declaration files
 
-a `.d.rv` file holds only `pub declare`s. importing one is compile-time only,
-the file never executes and the module resolves to an empty table:
+a `.d.rv` file holds only `pub declare`s and `pub type`s
+importing one is compile-time only,
+  the file never executes and the module resolves to an empty table
 
 ```revo
 # audio.d.rv
-pub declare ring = fn(volume: number, label: string) -> bool
+pub type Volume = number
+pub declare ring = fn(volume: Volume, label: string) -> bool
 ```
 
 ```revo
@@ -461,6 +463,10 @@ import "audio.d.rv"
 
 audio.ring(1, "x")     # typechecks; errors at runtime: field ring does not exist
 ```
+
+both forms accept dotted heads, so an alias can name its module explicitly and is used qualifiedly:
+    `pub type audio.Volume = number` is annotated as `audio.Volume`
+core `Target:key` heads are rejected on `pub type`; metatable slots are values, not types.
 
 `.d.rv` is also how shared library extensions get their types: `import
 "extension.so"` looks up a sibling `extension.d.rv` by stem and types every
@@ -1597,7 +1603,8 @@ print(x, y) # 2, 1
 
 ### preloaded macros
 
-these come with the runtime:
+these live in `src/std/iface/root.d.rv` and merge into every build;
+  stdlib groups can add more (`pub macro uri.shout! ...`), called qualified:
 
 ```revo
 ok?!((:ok, 42))            # :true

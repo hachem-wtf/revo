@@ -241,6 +241,18 @@ pub const TypeSpec = union(enum) {
             .tuple => data.isTuple(),
         };
     }
+
+    /// module table name for primitive method targets (`string:len` goes
+    /// in `string`); null for the rest. single source for this mapping.
+    pub fn moduleName(self: TypeSpec) ?[]const u8 {
+        return switch (self) {
+            .number => "number",
+            .string => "string",
+            .tuple => "tuple",
+            .table => "table",
+            else => null,
+        };
+    }
 };
 
 /// type name -> TypeSpec, for parsing sig heads (`tuple:len` -> .tuple)

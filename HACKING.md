@@ -46,7 +46,8 @@ the pipeline is `source -> lexer -> parser -> expander -> semantic -> compiler -
 
 errors at any step surface as `lang.Error` variants (`parse`/`expand`/`semantic`/`lower`), all rendered through `diagnostic.zig`
 
-~ `parse` Lexer + Parser produce the ast with `default_macro_source` merged in
+~ `parse` Lexer + Parser produce the ast with stdlib manifest macros
+    (`pub macro`/`pub proc` in `iface/*.d.rv`, root group for globals) merged in
 
 ~ `wrapModule` module scope only, a synthetic `@exports` table gets built from `pub` decls
 
@@ -97,7 +98,7 @@ the `2-way` here is close-ish to the the one described in [the Holzle/Chambers/U
 
 to make a new module:
 ~ copy any existing library - both its `foo.zig` implementation and the `iface/foo.d.rv` declaration\
-~ add it into `iface_groups` and `impl_groups` in `api.zig` (i know, it's not the prettiest)
+~ add one `Group.init` line in `api.zig` w/ both the `iface/foo.d.rv` source and the zig `impls`
 
 how it works:\
 the surface is at `iface/*.d.rv`, files carry doc-comment+declatarion sigs; `api.zig` merges them with the zig `impls` at boot (`register_stdlib`) into `full_specs`, keyed on the bare name, so the doc set always matches the runtime. the primitive type metatable _is_ the module table, so `x:method()` dispatch is a single lookup
