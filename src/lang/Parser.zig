@@ -2069,7 +2069,6 @@ const bare_call_arg_start_tokens = makeTokenSet(&.{
 });
 
 const call_stmt_boundary_tokens = makeTokenSet(&.{
-    .lparen,
     .string,
     .multiline_string,
     .lsquiggly,
@@ -2453,4 +2452,10 @@ test "declare defaults to pub" {
     const tokens = try lexer.lexAt(alloc, "declare ring = fn() -> int", .{});
     const root = try parseTokens(alloc, tokens);
     try std.testing.expect(root.expr.decl.pub_);
+}
+
+test "parses repeated paren calls" {
+    try testing.expectPrinted("f()()", "(call (call f))");
+    try testing.expectPrinted("f()()()", "(call (call (call f)))");
+    try testing.expectPrinted("f()()()()", "(call (call (call (call f))))");
 }

@@ -471,7 +471,7 @@ test "sleep with multiple spawned joins returns numeric sums" {
         \\ const a = spawn f(20)
         \\ const b = spawn f(22)
         \\ const c = spawn f(30)
-        \\ (join(a) + join(b) + join(c))
+        \\ join(a) + join(b) + join(c)
     , 72);
 }
 
