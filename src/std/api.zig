@@ -137,7 +137,8 @@ pub fn loadAllSpecs(caller_alloc: std.mem.Allocator) ![]const []const FnSpec {
             if (i > 0) for (specs[0..i]) |other| {
                 if (std.mem.eql(u8, other.name, s.name)) k += 1;
             };
-            s.f = implFor(ig.impls, s, k) orelse {
+            s.f = implFor(ig.impls, s, k) orelse stub: {
+                if (comptime revo.is_freestanding) break :stub root.defineStubVariadic(&[_]TypeSpec{});
                 std.debug.print("missing {s}\n", .{s.sig});
                 @panic("missing an std def");
             };
