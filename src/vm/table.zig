@@ -23,7 +23,6 @@ const revo = @import("revo");
 const memory = revo.memory;
 const Data = memory.Data;
 const testing = revo.lang.testing;
-const compare = @import("compare.zig").compare;
 const fastEq = @import("compare.zig").fastEq;
 const pool = @import("pool.zig");
 

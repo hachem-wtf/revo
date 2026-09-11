@@ -1494,13 +1494,23 @@ fn parseTuplePattern(self: *Parser, terminator: TokenType) anyerror!*Node {
 }
 
 /// turn expression into pattern: expr -> (expr, expr, ...)
+/// keyless `{...}` tables become array patterns, keyed tables stay values
 fn exprToPattern(self: *Parser, expr: *Node) anyerror!*Node {
     return switch (expr.expr) {
         .tuple => |items| blk: {
             var out = try std.ArrayList(*Node).initCapacity(self.alloc, items.len);
             errdefer out.deinit(self.alloc);
+
             for (items) |item| try out.append(self.alloc, try self.exprToPattern(item));
             break :blk try self.allocExpr(expr.span, .{ .tuple_pattern = try out.toOwnedSlice(self.alloc) });
+        },
+        .table => |entries| blk: {
+            for (entries) |entry| if (entry.key != null or entry.computed) break :blk expr;
+            var out = try std.ArrayList(*Node).initCapacity(self.alloc, entries.len);
+            errdefer out.deinit(self.alloc);
+
+            for (entries) |entry| try out.append(self.alloc, try self.exprToPattern(entry.value));
+            break :blk try self.allocExpr(expr.span, .{ .table_pattern = try out.toOwnedSlice(self.alloc) });
         },
         else => expr,
     };

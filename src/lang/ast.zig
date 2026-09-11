@@ -292,6 +292,8 @@ pub const Expr = union(enum) {
     block: []*Node,
     tuple: []*Node,
     tuple_pattern: []*Node,
+    table_pattern: []*Node,
+
     table: []TableEntry,
     proc_macro: struct { name: []const u8, param: FnParam, body: *Node },
     quasiquote: Quasiquote,
@@ -642,6 +644,7 @@ pub const Node = struct {
             .block => |exprs| try printNodeList(writer, "block", exprs, depth),
             .tuple => |items| try printNodeList(writer, "tuple", items, depth),
             .tuple_pattern => |items| try printNodeList(writer, "tuple-pattern", items, depth),
+            .table_pattern => |items| try printNodeList(writer, "table-pattern", items, depth),
             .table => |entries| {
                 if (entries.len == 0) {
                     try writer.writeAll("(table)");
@@ -1263,6 +1266,9 @@ pub fn walkExpr(
         }),
         .tuple_pattern => |items| allocNode(allocator, expr.span, .{
             .tuple_pattern = try walkSliceWith(allocator, items, Transform, ctx),
+        }),
+        .table_pattern => |items| allocNode(allocator, expr.span, .{
+            .table_pattern = try walkSliceWith(allocator, items, Transform, ctx),
         }),
         .block => |items| {
             const n = try allocNode(allocator, expr.span, .{

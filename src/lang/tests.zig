@@ -2169,6 +2169,66 @@ test "match tuple patterns" {
     , 42);
 }
 
+test "match table array patterns" {
+    try t.topNumber(
+        \\ const x = {:ok, 42}
+        \\ match x
+        \\ | {:asdf, v} => 1
+        \\ | {:ok, v} => v
+        \\ | {:err, e} => 2
+    , 42);
+    try t.topNumber(
+        \\ const x = {:ok, 42}
+        \\ match x
+        \\ | {:asdf, v} => 1
+        \\ | {:ok, v} when v < 20 => 2
+        \\ | {:ok, v} when v > 40 => v
+        \\ | {:ok, v} when number?(v) => 3
+        \\ | {:err, e} => 2
+    , 42);
+}
+
+test "match table patterns fall through on shape mismatch" {
+    try t.topNumber(
+        \\ match 99
+        \\ | {:ok, v} => 1
+        \\ | _ => 3
+    , 3);
+    try t.topNumber(
+        \\ match {:ok}
+        \\ | {:ok, v} => 1
+        \\ | _ => 4
+    , 4);
+    try t.topNumber(
+        \\ match {:ok, 1, 2}
+        \\ | {:ok, v} => 1
+        \\ | _ => 5
+    , 5);
+    try t.topNumber(
+        \\ match {1, 2, x = 9}
+        \\ | {a, b} => a + b
+        \\ | _ => 6
+    , 3);
+}
+
+test "match table nested patterns" {
+    try t.topNumber(
+        \\ match {:a, {:b, 7}}
+        \\ | {:a, {:b, v}} => v
+        \\ | _ => 0
+    , 7);
+    try t.topNumber(
+        \\ match {(:ok, 1), 2}
+        \\ | {(:ok, v), _} => v
+        \\ | _ => 0
+    , 1);
+    try t.topNumber(
+        \\ match (:ok, {:x, 5})
+        \\ | (:ok, {_, v}) => v
+        \\ | _ => 0
+    , 5);
+}
+
 //
 // assignment & binding
 //

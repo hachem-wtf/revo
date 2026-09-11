@@ -486,46 +486,38 @@ pub fn bindMatchPattern(
             try self.emit(.bind_local, slot);
             state.reserveLocalSlots(self);
         },
-        .tuple_pattern => try bindMatchTuplePattern(self, matcher, subject),
-        else => {},
-    }
-}
-
-pub fn bindMatchTuplePattern(
-    self: *Compiler,
-    pattern: *const Node,
-    source: VarStorage,
-) !void {
-    switch (pattern.expr) {
-        .ident => |name| {
-            if (ast.isDiscardName(name)) return;
-            try emitStorageLoad(self, source);
-            const slot = try state.declareLocal(self, name, true);
-            state.markLocalInitialized(self, slot);
-            try self.emit(.bind_local, slot);
-            state.reserveLocalSlots(self);
-        },
-        .tuple_pattern => |items| {
+        .tuple_pattern, .table_pattern => |items| {
+            const from_table = matcher.expr == .table_pattern;
             for (items, 0..) |item, idx| {
                 switch (item.expr) {
                     .ident => |name| {
                         if (ast.isDiscardName(name)) continue;
-                        try emitStorageLoad(self, source);
-                        try self.emit(.tuple_get_const, idx);
+                        try emitStorageLoad(self, subject);
+                        if (from_table) {
+                            try self.emit(.load_small_int, idx);
+                            try self.emit(.table_get, 0);
+                        } else try self.emit(.tuple_get_const, idx);
+
                         const slot = try state.declareLocal(self, name, true);
                         state.markLocalInitialized(self, slot);
                         try self.emit(.bind_local, slot);
+
                         state.reserveLocalSlots(self);
                     },
-                    .tuple_pattern => {
-                        try emitStorageLoad(self, source);
-                        try self.emit(.tuple_get_const, idx);
+                    .tuple_pattern, .table_pattern => {
+                        try emitStorageLoad(self, subject);
+                        if (from_table) {
+                            try self.emit(.load_small_int, idx);
+                            try self.emit(.table_get, 0);
+                        } else try self.emit(.tuple_get_const, idx);
+
                         // temp for nested pattern
                         const nested_slot = try state.declareLocal(self, "__bind_tmp", false);
                         state.markLocalInitialized(self, nested_slot);
                         try self.emit(.bind_local, nested_slot);
                         state.reserveLocalSlots(self);
-                        try bindMatchTuplePattern(self, item, .{ .local = nested_slot });
+
+                        try bindMatchPattern(self, item, .{ .local = nested_slot });
                     },
                     else => {},
                 }
@@ -582,8 +574,55 @@ pub fn compilePatternChecks(
                 self.slot_allocators.items[self.slot_allocators.items.len - 1] = slot_before;
             }
         },
+        .table_pattern => |items| {
+            // type check
+            //  , then array length
+            //  , then each element
+            try self.emit(.load_global, revo.core_atoms.type.atomId());
+            try emitStorageLoad(self, subject);
+            try self.emit(.call, 1);
+            try self.@"const"(Data.new.atom(try self.vm.internAtom("table")));
+            try self.emit(.eq, 0);
+            try fail_jumps.append(self.alloc, try self.jump(.jump_if_false));
+
+            // alen counts the array part only
+            //  , hash entries don't matter
+            try self.emit(.load_stdlib_global, try self.vm.internAtom("table"));
+            try self.emit(.table_get_atom, try self.vm.internAtom("alen"));
+            try emitStorageLoad(self, subject);
+            try self.emit(.call, 1);
+            try self.@"const"(Data.new.num(items.len));
+            try self.emit(.eq, 0);
+            try fail_jumps.append(self.alloc, try self.jump(.jump_if_false));
+
+            for (items, 0..) |item, idx| {
+                switch (item.expr) {
+                    .ident => |name| if (ast.isDiscardName(name)) continue,
+                    else => {},
+                }
+                const depth_before = self.active_registers;
+                const slot_before = self.slot_allocators.items[self.slot_allocators.items.len - 1];
+                try emitStorageLoad(self, subject);
+                try self.emit(.load_small_int, idx);
+                try self.emit(.table_get, 0);
+
+                // to not reindex in nested checks
+                const nested_slot = try state.declareLocal(self, "__match_tmp", false);
+                state.markLocalInitialized(self, nested_slot);
+                try self.emit(.bind_local, nested_slot);
+                state.reserveLocalSlots(self);
+
+                const nested_fails = try compilePatternChecks(self, .{ .local = nested_slot }, item);
+                for (nested_fails) |jump_idx| try fail_jumps.append(self.alloc, jump_idx);
+
+                self.alloc.free(nested_fails);
+                self.active_registers = depth_before;
+                self.slot_allocators.items[self.slot_allocators.items.len - 1] = slot_before;
+            }
+        },
         else => {
-            // literal or expression; evaluate and compare
+            // literal or expression
+            //   ; evaluate & cmp
             try emitStorageLoad(self, subject);
             try self.compile(expr, true);
             try self.emit(.eq, 0);
@@ -802,6 +841,27 @@ fn patternTypeInfo(self: *Compiler, pattern: *const Node) ?types_mod.TypeInfo {
             const tuple_items = types.toOwnedSlice(self.alloc) catch break :blk null;
             break :blk .{ .tag = .{ .tuple = tuple_items } };
         },
+        .table_pattern => |items| blk: {
+            var fields = std.ArrayList(types_mod.RecordField).initCapacity(self.alloc, items.len) catch break :blk null;
+            defer fields.deinit(self.alloc);
+
+            for (items, 0..) |item, idx| {
+                var buf: [16]u8 = undefined;
+                const name = std.fmt.bufPrint(&buf, "{d}", .{idx}) catch break :blk null;
+                const owned = self.alloc.dupe(u8, name) catch break :blk null;
+
+                fields.append(self.alloc, .{
+                    .name = owned,
+                    .field_type = patternTypeInfo(self, item) orelse types_mod.TypeInfo{ .tag = .any },
+                }) catch break :blk null;
+            }
+
+            const owned_fields = fields.toOwnedSlice(self.alloc) catch break :blk null;
+            const value_ptr = self.alloc.create(types_mod.TypeInfo) catch break :blk null;
+
+            value_ptr.* = .{ .tag = .any };
+            break :blk types_mod.makeTable(null, value_ptr, owned_fields);
+        },
         .ident => |name| {
             // look up the variable type from hints or local state
             // // and type narrowing from variable names is handled somewher else
@@ -814,7 +874,10 @@ fn patternTypeInfo(self: *Compiler, pattern: *const Node) ?types_mod.TypeInfo {
 }
 
 /// narrow pattern variables by subject's union type:
-///     `| (:ok, v) =>` narrows `v` to the payload type of the `:ok` variant
+///     `| (:ok, v) =>`
+/// and `| {:ok, v} =>`
+///     narrow `v` to the payload
+///     type of the `:ok` variant
 fn narrowMatchPattern(
     self: *Compiler,
     pattern: *const Node,
@@ -822,25 +885,25 @@ fn narrowMatchPattern(
 ) !void {
     if (subject_type.tag != .@"union") return;
 
-    if (pattern.expr != .tuple_pattern) return;
-    const items = pattern.expr.tuple_pattern;
+    const items = switch (pattern.expr) {
+        .tuple_pattern, .table_pattern => |items| items,
+        else => return,
+    };
+
     if (items.len == 0) return;
 
     const first = items[0];
     const tag = if (first.expr == .hash) first.expr.hash else return;
 
     for (subject_type.tag.@"union") |variant| {
-        const vt = variant.types;
-        if (vt.len == 0 or vt[0].tag != .atom) continue;
+        if (!types_mod.unionVariantTagEql(variant, tag)) continue;
+        var payload = std.ArrayList(types_mod.TypeInfo).initCapacity(self.alloc, 4) catch return;
+        defer payload.deinit(self.alloc);
+        try types_mod.appendUnionVariantPayload(self.alloc, variant, &payload);
 
-        const variant_tag = ast.atomName(vt[0].tag.atom);
-        const pattern_tag = if (tag.len > 0 and tag[0] == ':') tag[1..] else tag;
-        if (!std.mem.eql(u8, variant_tag, pattern_tag)) continue;
-
-        const payload = vt[1..];
         for (items[1..], 0..) |item, i| {
             if (item.expr == .ident and !ast.isDiscardName(item.expr.ident)) {
-                const narrowed = if (i < payload.len) payload[i] else types_mod.TypeInfo{ .tag = .any };
+                const narrowed = if (i < payload.items.len) payload.items[i] else types_mod.TypeInfo{ .tag = .any };
                 try state.setLocalTypeHint(self, item.expr.ident, narrowed);
             }
         }

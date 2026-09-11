@@ -681,4 +681,3 @@ test "stats methods" {
 
 // quantiles(data, n=4, method='exclusive')
 // Divide data into intervals with equal probability.
-

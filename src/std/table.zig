@@ -278,6 +278,11 @@ pub const Impl = struct {
         return .data(Data.new.num(table.count()));
     }
 
+    pub fn alen(vm: *VM, self: Ts.table) !HostResult {
+        const table = try vm.tables.get(@intFromEnum(self));
+        return .data(Data.new.num(table.array.items.len));
+    }
+
     pub fn add(vm: *VM, self: Ts.table, other: Ts.table) !HostResult {
         const left = try vm.tables.get(@intFromEnum(self));
         const right = try vm.tables.get(@intFromEnum(other));
@@ -346,6 +351,9 @@ fn push(args: []const Data, vm: *VM) !HostResult {
 
 test "table library" {
     try testing.topNumber("len({1, 2, 3})", 3);
+    try testing.topNumber("{1, 2, 3}:alen()", 3);
+    try testing.topNumber("{1, 2, x = 9}:alen()", 2);
+    try testing.topNumber("len({1, 2, x = 9})", 3);
 }
 
 test "table methods" {

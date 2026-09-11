@@ -883,7 +883,7 @@ const SemanticChecker = struct {
                 try self.declare(m.name, .{ .tag = .any }, null);
                 break :blk .{ .tag = .any };
             },
-            .number, .string, .multiline_string, .hash, .nil, .tuple, .table, .tuple_pattern, .quasiquote, .test_block, .test_suite, .proc_macro => types_mod.inferExprType(self, node),
+            .number, .string, .multiline_string, .hash, .nil, .tuple, .table, .tuple_pattern, .table_pattern, .quasiquote, .test_block, .test_suite, .proc_macro => types_mod.inferExprType(self, node),
         };
     }
 
@@ -1102,7 +1102,7 @@ const SemanticChecker = struct {
                     try self.declare(name, .{ .tag = .any }, null);
                 }
             },
-            .tuple_pattern => |items| {
+            .tuple_pattern, .table_pattern => |items| {
                 for (items) |item| {
                     _ = try self.declarePatternNames(item);
                 }
@@ -1113,46 +1113,35 @@ const SemanticChecker = struct {
     }
 
     /// narrow match pattern bindings when the subject type is a tagged union
-    /// `(:ok, v)` patterns against `(:ok, int) | (:err, string)` should bind
-    /// `v` as `.int`, not `.any`
+    /// `(:ok, v)` and `{:ok, v}` patterns against `(:ok, int) | (:err, string)`
+    /// (or the table-union spelling) bind `v` as `.int`, not `.any`
     fn narrowPatternNames(self: *SemanticChecker, pattern: *const ast.Node, subject_type: types_mod.TypeInfo) !void {
         if (subject_type.tag == .any) return;
 
-        switch (pattern.expr) {
-            .tuple_pattern => |items| if (items.len > 0) {
-                const first = items[0];
-                const tag = if (first.expr == .hash) first.expr.hash else return;
-                const payload = try self.narrowedPayload(subject_type, tag) orelse return;
-                for (items[1..], 0..) |item, i| {
-                    if (item.expr == .ident and !ast.isDiscardName(item.expr.ident)) {
-                        const narrowed = if (i < payload.len) payload[i] else types_mod.TypeInfo{ .tag = .any };
-                        try self.declare(item.expr.ident, narrowed, null);
-                    }
-                }
-            },
-            else => {},
-        }
-    }
-
-    /// given a union type like `(:ok, int) | (:err, string)` and a tag atom
-    /// like `:ok`, return the payload types `[int]`, or null if no match
-    fn narrowedPayload(self: *SemanticChecker, subject_type: types_mod.TypeInfo, tag: []const u8) !?[]const types_mod.TypeInfo {
-        _ = self;
+        const items = switch (pattern.expr) {
+            .tuple_pattern, .table_pattern => |items| items,
+            else => return,
+        };
+        if (items.len == 0) return;
+        const first = items[0];
+        const tag = if (first.expr == .hash) first.expr.hash else return;
         const variants = switch (subject_type.tag) {
             .@"union" => |us| us,
-            else => return null,
+            else => return,
         };
         for (variants) |variant| {
-            // first T is the tag atom; payload is the rest
-            if (variant.types.len > 0 and variant.types[0].tag == .atom) {
-                const variant_tag = ast.atomName(variant.types[0].tag.atom);
-                const pattern_tag = if (tag[0] == ':') tag[1..] else tag;
-                if (std.mem.eql(u8, variant_tag, pattern_tag)) {
-                    return variant.types[1..];
+            if (!types_mod.unionVariantTagEql(variant, tag)) continue;
+            var payload = std.ArrayList(types_mod.TypeInfo).initCapacity(self.alloc, 4) catch return;
+            defer payload.deinit(self.alloc);
+            try types_mod.appendUnionVariantPayload(self.alloc, variant, &payload);
+            for (items[1..], 0..) |item, i| {
+                if (item.expr == .ident and !ast.isDiscardName(item.expr.ident)) {
+                    const narrowed = if (i < payload.items.len) payload.items[i] else types_mod.TypeInfo{ .tag = .any };
+                    try self.declare(item.expr.ident, narrowed, null);
                 }
             }
+            return;
         }
-        return null;
     }
 
     fn analyzeAssign(self: *SemanticChecker, assign: anytype, span: ast.Span) !types_mod.TypeInfo {

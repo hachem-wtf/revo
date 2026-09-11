@@ -1,3 +1,9 @@
+//!
+//! welcome to std's root
+//!
+//! this is the public interface and the collection of top-level globals
+//!
+
 const std = @import("std");
 const builtin = @import("builtin");
 

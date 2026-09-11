@@ -45,6 +45,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     # => 5
     ```
 
+- match table array patterns!
+  keyless `{...}` in arm position destructures the array part
+  keyed tables are still matched by equality
+
+  ```ruby
+  match {:ok, 42}
+  | {:ok, v} => v
+  | {:err, e} => 0
+  # => 42
+  ```
+
+  union narrowing works too: `{:ok, v}` against
+  `{:ok, num} | {:err, string}` binds `v: num`
+
 - std:
   - `hash(any) -> num`
   - `fs`:

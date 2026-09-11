@@ -445,17 +445,66 @@ fn isOkTag(name: []const u8) bool {
     return std.mem.eql(u8, name, ":ok") or std.mem.eql(u8, name, "ok");
 }
 
-/// `(:ok, T) | (:err, any)` unions (both the `!T` sugar and the literal
-/// form) and `(:ok, T)` / `(:err, E)` tagged tuples
+/// tag of one union variant, tuple-style `(:ok, T)` or table-style `{:ok, T}`
+///     : table tags live in positional field "0", payload in "1", "2", ...
+pub fn unionVariantTagEql(variant: UnionVariant, tag: []const u8) bool {
+    const pattern_tag = if (tag.len > 0 and tag[0] == ':') tag[1..] else tag;
+    if (variant.types.len == 0) return false;
+
+    if (variant.types[0].tag == .atom) {
+        return std.mem.eql(u8, ast.atomName(variant.types[0].tag.atom), pattern_tag);
+    }
+
+    if (variant.types[0].tag == .table) {
+        const fields = variant.types[0].tag.table.fields orelse return false;
+        if (fields.len == 0 or !std.mem.eql(u8, fields[0].name, "0")) return false;
+        if (fields[0].field_type.tag != .atom) return false;
+        return std.mem.eql(u8, ast.atomName(fields[0].field_type.tag.atom), pattern_tag);
+    }
+
+    return false;
+}
+
+/// payload types after the tag
+///   : tuple tail
+///     , or leading numeric table fields past "0"
+///         - stops at the first non-positional field
+pub fn appendUnionVariantPayload(alloc: std.mem.Allocator, variant: UnionVariant, out: *std.ArrayList(TypeInfo)) !void {
+    if (variant.types.len == 0) return;
+    if (variant.types[0].tag == .atom) {
+        try out.appendSlice(alloc, variant.types[1..]);
+        return;
+    }
+
+    if (variant.types[0].tag == .table) {
+        const fields = variant.types[0].tag.table.fields orelse return;
+        if (fields.len == 0) return;
+        var idx: usize = 1;
+
+        for (fields[1..]) |f| {
+            var buf: [16]u8 = undefined;
+            const want = std.fmt.bufPrint(&buf, "{d}", .{idx}) catch return;
+            if (!std.mem.eql(u8, f.name, want)) return;
+            try out.append(alloc, f.field_type);
+            idx += 1;
+        }
+    }
+}
+
+/// `(:ok, T) | (:err, any)` unions
+///     (both the `!T` sugar and the literal form),
+/// `(:ok, T)` / `(:err, E)` tagged tuples,
+///     and the same shapes as tables
+///         (`{:ok, T} | {:err, E}`)
+///
+/// now that tables replace tuples
 ///
 /// the shapes `?` and `orelse` unwrap at runtime
 pub fn isResultType(ti: TypeInfo) bool {
     return switch (ti.tag) {
         .@"union" => |us| blk: {
             for (us) |v| {
-                if (v.types.len >= 2 and v.types[0].tag == .atom and isResultTag(ast.atomName(v.types[0].tag.atom))) {
-                    break :blk true;
-                }
+                if (unionVariantTagEql(v, ":ok") or unionVariantTagEql(v, ":err")) break :blk true;
             }
             break :blk false;
         },
@@ -463,19 +512,35 @@ pub fn isResultType(ti: TypeInfo) bool {
             const at = ast.atomName(items[0].tag.atom);
             break :blk isResultTag(at);
         },
+        .table => |tbl| blk: {
+            const fields = tbl.fields orelse break :blk false;
+            if (fields.len == 0 or fields[0].field_type.tag != .atom) break :blk false;
+            break :blk isResultTag(ast.atomName(fields[0].field_type.tag.atom));
+        },
         else => false,
     };
 }
 
-/// unwrap the `:ok` payload from a `(:ok, T) | (:err, any)` union or a
-/// `(:ok, T)` tagged tuple; mirrors the runtime, which yields only the
-/// first payload element
+///
+/// unwrap the `:ok` payload from a `(:ok, T) | (:err, any)` union
+///
+/// or a `(:ok, T)` tagged tuple
+///     , and the `{:ok, T}` table equivalents
+/// ; mirrors the runtime
+///     , which yields only the first payload element
 pub fn okTypeFrom(ti: TypeInfo) TypeInfo {
     return switch (ti.tag) {
         .@"union" => |variants| blk: {
             for (variants) |v| {
-                if (v.types.len >= 2 and v.types[0].tag == .atom and isOkTag(ast.atomName(v.types[0].tag.atom))) {
-                    break :blk v.types[1];
+                if (!unionVariantTagEql(v, ":ok")) continue;
+                if (v.types.len > 0 and v.types[0].tag == .atom) {
+                    if (v.types.len >= 2) break :blk v.types[1];
+                    continue;
+                }
+                if (v.types.len > 0 and v.types[0].tag == .table) {
+                    const fields = v.types[0].tag.table.fields orelse continue;
+                    if (fields.len >= 2 and std.mem.eql(u8, fields[1].name, "1")) break :blk fields[1].field_type;
+                    continue;
                 }
             }
             break :blk .{ .tag = .any };
@@ -485,6 +550,13 @@ pub fn okTypeFrom(ti: TypeInfo) TypeInfo {
             const at = ast.atomName(items[0].tag.atom);
             if (!isOkTag(at)) break :blk .{ .tag = .any };
             break :blk items[1];
+        },
+        .table => |tbl| blk: {
+            const fields = tbl.fields orelse break :blk .{ .tag = .any };
+            if (fields.len < 2 or fields[0].field_type.tag != .atom) break :blk .{ .tag = .any };
+            if (!isOkTag(ast.atomName(fields[0].field_type.tag.atom))) break :blk .{ .tag = .any };
+            if (!std.mem.eql(u8, fields[1].name, "1")) break :blk .{ .tag = .any };
+            break :blk fields[1].field_type;
         },
         else => .{ .tag = .any },
     };
@@ -574,7 +646,7 @@ pub fn inferExprType(ctx: anytype, node: *const ast.Node) TypeInfo {
         .try_expr => |inner| blk: {
             const it = inferExprType(ctx, inner);
             break :blk switch (it.tag) {
-                .@"union", .tuple => okTypeFrom(it),
+                .@"union", .tuple, .table => okTypeFrom(it),
                 else => it,
             };
         },
@@ -583,7 +655,7 @@ pub fn inferExprType(ctx: anytype, node: *const ast.Node) TypeInfo {
         .import_stmt, .test_block, .test_suite, .macro_expr, .proc_macro, .quasiquote => .{ .tag = .any },
         .match_expr => |v| inferMatchType(ctx, v.subject, v.arms),
         .range_literal, .slice_literal => .{ .tag = .number },
-        .assign_expr, .decl, .binding, .tuple_pattern, .type_alias => .{ .tag = .any },
+        .assign_expr, .decl, .binding, .tuple_pattern, .table_pattern, .type_alias => .{ .tag = .any },
     };
 }
 
@@ -616,6 +688,7 @@ fn inferTableType(ctx: anytype, entries: []const ast.TableEntry) TypeInfo {
             const inferred_key = inferTableKeyType(ctx, entry);
             key_type = if (saw_explicit_key) mergeInferredType(key_type, inferred_key) else inferred_key;
             saw_explicit_key = true;
+            //
             // static `name = v` keys become record fields; dupes replace,
             // last wins like the runtime
             if (ast.staticFieldName(entry)) |name| {
@@ -1890,16 +1963,17 @@ test "never arms don't poison match result type" {
     , .ParseError);
 }
 
-test "match narrowing enables specialized add_int from union payload" {
-    // narrowing should make `v` num instead of any, so `v + 1` should emit add_int
+test "match narrowing works for call subjects" {
+    // the subject is a call, not an ident: `v` still narrows to the payload
+    // type (from the fn's declared return) and `v + 1` emits add_int
     var vm = try VM.init(testRuntime());
     defer vm.deinit();
 
     const built = try lang.build(&vm, .{
         .text =
         \\ type Res = (:ok, num) | (:err, string)
-        \\ let x: Res = (:ok, 42)
-        \\ match x
+        \\ fn g() -> Res do (:ok, 42) end
+        \\ match g()
         \\ | (:ok, v) => v + 1
         \\ | (:err, _) => 0
         ,
@@ -1915,19 +1989,19 @@ test "match narrowing enables specialized add_int from union payload" {
     try std.testing.expect(saw_add_int);
 }
 
-test "match narrowing works for call subjects" {
-    // the subject is a call, not an ident: `v` still narrows to the payload
-    // type (from the fn's declared return) and `v + 1` emits add_int
+test "match narrowing enables specialized add_int from table union payload" {
+    // same as the tuple version but with table-result unions
+    // `v` narrows to num so `v + 1` emits add_int
     var vm = try VM.init(testRuntime());
     defer vm.deinit();
 
     const built = try lang.build(&vm, .{
         .text =
-        \\ type Res = (:ok, num) | (:err, string)
-        \\ fn g() -> Res do (:ok, 42) end
-        \\ match g()
-        \\ | (:ok, v) => v + 1
-        \\ | (:err, _) => 0
+        \\ type Res = {:ok, num} | {:err, string}
+        \\ let x: Res = {:ok, 42}
+        \\ match x
+        \\ | {:ok, v} => v + 1
+        \\ | {:err, _} => 0
         ,
     }, .{});
     try std.testing.expect(built == .ok);

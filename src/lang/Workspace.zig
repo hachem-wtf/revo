@@ -2540,7 +2540,7 @@ const SymbolVisitor = struct {
                     }
                 }
             },
-            .tuple_pattern => |items| {
+            .tuple_pattern, .table_pattern => |items| {
                 for (items) |item| {
                     if (item.expr == .ident and !lang.ast.isDiscardName(item.expr.ident))
                         self.addName(item.expr.ident, .binding, item.span);

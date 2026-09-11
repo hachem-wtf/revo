@@ -347,7 +347,7 @@ pub const AstSubstituter = struct {
                 .value = try self.substitute(b.value),
                 .mutable = b.mutable,
             } }),
-            .number, .string, .multiline_string, .hash, .nil, .range_literal, .slice_literal, .tuple_pattern, .macro_expr, .quasiquote, .decl, .comp_block, .test_block, .test_suite, .proc_macro, .try_expr, .orelse_expr, .type_alias, .import_stmt => node,
+            .number, .string, .multiline_string, .hash, .nil, .range_literal, .slice_literal, .tuple_pattern, .table_pattern, .macro_expr, .quasiquote, .decl, .comp_block, .test_block, .test_suite, .proc_macro, .try_expr, .orelse_expr, .type_alias, .import_stmt => node,
         };
     }
 

@@ -92,6 +92,9 @@ pub declare table.unique = fn(self: table) -> table
 #* returns length of table array part *#
 pub declare table.len = fn(self: table) -> num
 
+#* returns length of table array part *#
+pub declare table.alen = fn(self: table) -> num
+
 #* returns the array parts of the two tables *#
 pub declare table.add = fn(self: table, other: table) -> table
 

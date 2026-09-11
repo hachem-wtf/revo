@@ -854,6 +854,11 @@ pub const Compiler = struct {
                 expr,
                 "tuple patterns do not compile as values",
             ),
+            .table_pattern => return self.fail(
+                .UnsupportedSyntax,
+                expr,
+                "table patterns do not compile as values",
+            ),
             .range_literal => return self.fail(
                 .UnsupportedSyntax,
                 expr,
