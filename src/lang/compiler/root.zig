@@ -397,10 +397,18 @@ pub const Compiler = struct {
 
     pub fn recordMove(self: *Compiler, result_reg: Register) !void {
         if (self.value_stack.items.len == 0) {
+            try self.spans.append(self.alloc, self.active_span);
             _ = try self.record(.load_nil, &.{}, true, result_reg, 0);
             return;
         }
         const src = self.value_stack.items[self.value_stack.items.len - 1];
+        // self-move is a register no-op
+        // alias it instead of emitting `move r,r` for peephole to clean up later
+        if (ir.valueReg(.{ .inst = src }) == result_reg) {
+            try self.value_stack.append(self.alloc, src);
+            return;
+        }
+        try self.spans.append(self.alloc, self.active_span);
         _ = try self.record(.move, &.{.{ .inst = src }}, true, result_reg, 0);
     }
 
@@ -435,7 +443,6 @@ pub const Compiler = struct {
     pub fn regDupe(self: *Compiler) !void {
         std.debug.assert(self.active_registers != 0);
         const dst = try toRegister(self.active_registers);
-        try self.spans.append(self.alloc, self.active_span);
         self.active_registers += 1;
         if (self.active_registers > self.max_registers) self.max_registers = self.active_registers;
         try self.recordMove(dst);
@@ -688,7 +695,6 @@ pub const Compiler = struct {
                         self.upvalue_cache.get(upval_id) == top_inst.?.result_reg)
                     {
                         const dst = try state_mod.pushRegister(self);
-                        try self.spans.append(self.alloc, self.active_span);
                         try self.recordMove(dst);
                     } else {
                         try self.emit(.load_upval, upval_id);
