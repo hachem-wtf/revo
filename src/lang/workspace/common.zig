@@ -38,18 +38,8 @@ pub fn deinitBytecode(alloc: std.mem.Allocator, bytecode: pipeline.Bytecode) voi
 ///
 /// parts get copied, callers can free both inputs right after
 pub fn mergeReports(alloc: std.mem.Allocator, a: pipeline.Error, b: pipeline.Error) !diagnostic.Report {
-    const a_report = switch (a) {
-        .parse => |f| f.report,
-        .expand => |f| f.report,
-        .compile => |f| f.report,
-        .semantic => |f| f.report,
-    };
-    const b_report = switch (b) {
-        .parse => |f| f.report,
-        .expand => |f| f.report,
-        .compile => |f| f.report,
-        .semantic => |f| f.report,
-    };
+    const a_report = pipeline.errorReport(a);
+    const b_report = pipeline.errorReport(b);
     const total = a_report.parts.len + b_report.parts.len;
     var all_parts = try std.ArrayList(diagnostic.Part).initCapacity(alloc, total);
 
@@ -100,31 +90,15 @@ pub fn copyError(
     source_name: []const u8,
     source: []const u8,
 ) !pipeline.Error {
+    var report = try pipeline.errorReport(err).copy(alloc);
+    errdefer report.deinit(alloc);
+    report.source_name = try alloc.dupe(u8, source_name);
+    report.source = try alloc.dupe(u8, source);
     return switch (err) {
-        .parse => |failure| blk: {
-            var report = try failure.report.copy(alloc);
-            report.source_name = try alloc.dupe(u8, source_name);
-            report.source = try alloc.dupe(u8, source);
-            break :blk .{ .parse = .{ .kind = failure.kind, .report = report } };
-        },
-        .expand => |failure| blk: {
-            var report = try failure.report.copy(alloc);
-            report.source_name = try alloc.dupe(u8, source_name);
-            report.source = try alloc.dupe(u8, source);
-            break :blk .{ .expand = .{ .report = report } };
-        },
-        .compile => |failure| blk: {
-            var report = try failure.report.copy(alloc);
-            report.source_name = try alloc.dupe(u8, source_name);
-            report.source = try alloc.dupe(u8, source);
-            break :blk .{ .compile = .{ .kind = failure.kind, .report = report } };
-        },
-        .semantic => |failure| blk: {
-            var report = try failure.report.copy(alloc);
-            report.source_name = try alloc.dupe(u8, source_name);
-            report.source = try alloc.dupe(u8, source);
-            break :blk .{ .semantic = .{ .kind = failure.kind, .report = report } };
-        },
+        .parse => |failure| .{ .parse = .{ .kind = failure.kind, .report = report } },
+        .expand => .{ .expand = .{ .report = report } },
+        .compile => |failure| .{ .compile = .{ .kind = failure.kind, .report = report } },
+        .semantic => |failure| .{ .semantic = .{ .kind = failure.kind, .report = report } },
     };
 }
 

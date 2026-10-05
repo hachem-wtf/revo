@@ -319,12 +319,6 @@ pub const fnSig = analyze_mod.fnSig;
 ///   keeps cache from thrashing
 pub const fnSigOpts = analyze_mod.fnSigOpts;
 
-/// check inspect cache and return cached Analysis if valid
-pub const inspectCached = cache_mod.inspectCached;
-
-/// cache error state and return Analysis with diags
-pub const inspectParseError = cache_mod.inspectParseError;
-
 // store build bytecode in cache
 pub const putCache = cache_mod.putCache;
 

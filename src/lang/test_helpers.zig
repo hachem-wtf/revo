@@ -358,14 +358,12 @@ pub fn expectCompileErrorInDir(import_dir: []const u8, source: []const u8) !void
             defer alloc.free(bytecode.spans);
             return error.ExpectedCompileFailure;
         },
-        .err => |failure| switch (failure) {
-            .semantic, .compile => {
-                vm.runtime.resetDiagArena();
-            },
-            .expand, .parse => {
-                vm.runtime.resetDiagArena();
-                return error.ExpectedCompileFailure;
-            },
+        .err => |failure| {
+            vm.runtime.resetDiagArena();
+            switch (failure) {
+                .semantic, .compile => {},
+                else => return error.ExpectedCompileFailure,
+            }
         },
     }
 }

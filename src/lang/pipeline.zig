@@ -448,6 +448,15 @@ pub fn compile(
     };
 }
 
+pub fn errorReport(err: Error) diagnostic.Report {
+    return switch (err) {
+        .parse => |failure| failure.report,
+        .expand => |failure| failure.report,
+        .compile => |failure| failure.report,
+        .semantic => |failure| failure.report,
+    };
+}
+
 pub fn renderError(
     allocator: std.mem.Allocator,
     writer: *std.Io.Writer,
@@ -455,29 +464,10 @@ pub fn renderError(
     err: Error,
     opts: diagnostic.RenderOptions,
 ) !void {
-    return switch (err) {
-        .parse => |failure| blk: {
-            var report = failure.report;
-            report.source_name = report.source_name orelse source.name;
-            report.source = source.text;
-            break :blk diagnostic.renderReport(allocator, writer, report, opts);
-        },
-        .expand => |failure| blk: {
-            break :blk diagnostic.renderReport(allocator, writer, failure.report, opts);
-        },
-        .compile => |failure| blk: {
-            var report = failure.report;
-            report.source_name = report.source_name orelse source.name;
-            report.source = source.text;
-            break :blk diagnostic.renderReport(allocator, writer, report, opts);
-        },
-        .semantic => |failure| blk: {
-            var report = failure.report;
-            report.source_name = report.source_name orelse source.name;
-            report.source = source.text;
-            break :blk diagnostic.renderReport(allocator, writer, report, opts);
-        },
-    };
+    var report = errorReport(err);
+    report.source_name = report.source_name orelse source.name;
+    report.source = source.text;
+    return diagnostic.renderReport(allocator, writer, report, opts);
 }
 
 /// render a warnings report
@@ -491,13 +481,8 @@ pub fn renderWarnings(allocator: std.mem.Allocator, writer: *std.Io.Writer, sour
 }
 
 pub fn deinitError(alloc: std.mem.Allocator, err: Error) void {
-    var mutable = err;
-    switch (mutable) {
-        .parse => |*failure| failure.report.deinit(alloc),
-        .expand => |*failure| failure.report.deinit(alloc),
-        .compile => |*failure| failure.report.deinit(alloc),
-        .semantic => |*failure| failure.report.deinit(alloc),
-    }
+    var report = errorReport(err);
+    report.deinit(alloc);
 }
 
 /// flat merge of prelude roots before user code: one shared scope, so

@@ -609,7 +609,7 @@ pub fn dceIr(self: *Compiler) !void {
     // correspondence with instructions, and jump targets / template addrs
     // (instruction indices) are remapped. for dead positions the remap points
     // at the next live slot so stale addresses still land on real code.
-    try ir.compactIr(self, n, live);
+    try self.compactIr(n, live);
 }
 
 //
@@ -682,7 +682,7 @@ pub fn peepholeIr(self: *Compiler) !void {
         }
     }
 
-    try ir.compactIr(self, n, live);
+    try self.compactIr(n, live);
 }
 
 fn threadJumps(insts: []*ir.IrInst, inst: *ir.IrInst) void {

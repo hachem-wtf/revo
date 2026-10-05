@@ -4,74 +4,15 @@ const std = @import("std");
 
 const common = @import("common.zig");
 const diagnostic = @import("../diagnostic.zig");
-const Parser = @import("../Parser.zig");
 const pipeline = @import("../pipeline.zig");
 
 const W = @import("../Workspace.zig");
 const Workspace = W.Workspace;
 const FileId = W.FileId;
-const Snapshot = W.Snapshot;
-const Analysis = W.Analysis;
 const Symbol = W.Symbol;
 const FnSig = W.FnSig;
 const CacheEntry = W.CacheEntry;
 const InspectCacheEntry = W.InspectCacheEntry;
-
-/// check inspect cache and return cached Analysis if valid
-pub fn inspectCached(
-    self: *Workspace,
-    alloc: std.mem.Allocator,
-    snap: Snapshot,
-    id: FileId,
-    opts: pipeline.BuildOptions,
-) !?Analysis {
-    const cached = self.inspect_cache.get(id) orelse return null;
-    if (cached.version != snap.version or !common.sameOpts(cached.opts, opts)) return null;
-    const cached_diag = if (cached.diagnostics) |diag|
-        try common.copyError(alloc, diag, snap.name, snap.text)
-    else
-        null;
-    return Analysis{
-        .snapshot = snap,
-        .diagnostics = cached_diag,
-        .cached = true,
-        .symbols = try common.copySymbols(alloc, cached.symbols),
-        .dependencies = try self.copyDeps(alloc, id),
-    };
-}
-
-/// cache error state and return Analysis with diags
-pub fn inspectParseError(
-    self: *Workspace,
-    alloc: std.mem.Allocator,
-    snap: Snapshot,
-    id: FileId,
-    opts: pipeline.BuildOptions,
-    err: Parser.ParseFailure,
-) !Analysis {
-    var report = try err.report.copy(alloc);
-    report.source_name = try alloc.dupe(u8, snap.name);
-    report.source = try alloc.dupe(u8, snap.text);
-
-    const parse_error: pipeline.Error = .{ .parse = .{ .kind = err.kind, .report = report } };
-    const cache_diag = try common.copyError(self.alloc, parse_error, snap.name, snap.text);
-    errdefer pipeline.deinitError(self.alloc, cache_diag);
-
-    const empty_syms = try self.alloc.alloc(Symbol, 0);
-    errdefer self.alloc.free(empty_syms);
-
-    const empty_deps = try self.alloc.alloc(FileId, 0);
-    errdefer self.alloc.free(empty_deps);
-
-    try putInspectCache(self, id, snap.version, opts, empty_syms, empty_deps, cache_diag, .empty, .init(self.alloc));
-    return .{
-        .snapshot = snap,
-        .diagnostics = parse_error,
-        .cached = false,
-        .symbols = try alloc.alloc(Symbol, 0),
-        .dependencies = try alloc.alloc(FileId, 0),
-    };
-}
 
 // store build bytecode in cache
 pub fn putCache(

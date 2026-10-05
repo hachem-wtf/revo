@@ -6,7 +6,6 @@ const Instruction = revo.opcode.Instruction;
 const Opcode = revo.opcode.Opcode;
 const Operand = revo.Operand;
 const Register = revo.opcode.Register;
-const Compiler = @import("../compiler/root.zig").Compiler;
 
 pub const IrValue = union(enum) { reg: Register, inst: *IrInst };
 
@@ -224,39 +223,6 @@ pub fn repointUsers(insts: []*IrInst, from: usize, dead: *IrInst, repl: IrValue)
         for (u.operands) |*op| {
             if (op.* == .inst and op.inst == dead) op.* = repl;
         }
-    }
-}
-
-/// compact a `live` bitmap into the instruction list: keep live instructions
-/// (and their spans), destroy dead ones, then remap jump targets and function
-/// entry addresses, which are stored as instruction indices. dead positions
-/// map to the next live slot so stale addresses still land on real code
-pub fn compactIr(self: *Compiler, n: usize, live: []const bool) !void {
-    const insts = self.ir_builder.instructions.items;
-    var new_index = try self.alloc.alloc(usize, n);
-    defer self.alloc.free(new_index);
-
-    var write: usize = 0;
-    for (insts, 0..) |inst, i| {
-        new_index[i] = write;
-        if (live[i]) {
-            self.ir_builder.instructions.items[write] = inst;
-            self.spans.items[write] = self.spans.items[i];
-            write += 1;
-        } else {
-            self.alloc.free(inst.operands);
-            self.alloc.destroy(inst);
-        }
-    }
-    self.ir_builder.instructions.shrinkAndFree(self.alloc, write);
-    self.spans.shrinkAndFree(self.alloc, write);
-
-    for (self.ir_builder.instructions.items) |inst| {
-        if (isBranch(inst.opcode)) inst.op_arg = new_index[inst.op_arg];
-    }
-    for (self.pending_templates.items) |template_id| {
-        const template = &self.vm.callable.templates.items[template_id];
-        template.addr = @intCast(new_index[template.addr]);
     }
 }
 
