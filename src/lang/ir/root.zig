@@ -19,6 +19,8 @@ pub const IrInst = struct {
     // nested closures are deeper. promotion only touches loops at the root
     // depth, because nested frames keep their own (smaller) register_count
     fn_depth: u16 = 0,
+    /// dense position in the builder list, refreshed by passes that need it
+    tmp_index: usize = 0,
 };
 
 pub const IrBuilder = struct {

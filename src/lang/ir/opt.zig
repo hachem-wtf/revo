@@ -391,11 +391,8 @@ pub fn dceIr(self: *Compiler) !void {
     const n = insts.len;
     if (n == 0) return;
 
-    // map each *IrInst to its current index (4 fast lookups)
-    var index_of = std.AutoHashMap(*ir.IrInst, usize).init(self.alloc);
-    defer index_of.deinit();
-    try index_of.ensureTotalCapacity(@intCast(n));
-    for (insts, 0..) |inst, i| index_of.putAssumeCapacity(inst, i);
+    // dense positions for `.inst` operand res, operands always point backward, so every target is in this list
+    for (insts, 0..) |inst, i| inst.tmp_index = i;
 
     var live = try self.alloc.alloc(bool, n);
     defer self.alloc.free(live);
@@ -491,11 +488,10 @@ pub fn dceIr(self: *Compiler) !void {
             if (!live[di]) continue;
             for (inst.operands) |op| {
                 if (op == .inst) {
-                    if (index_of.get(op.inst)) |j| {
-                        if (!live[j]) {
-                            live[j] = true;
-                            changed = true;
-                        }
+                    const j = op.inst.tmp_index;
+                    if (j < n and !live[j]) {
+                        live[j] = true;
+                        changed = true;
                     }
                 }
             }
