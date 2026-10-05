@@ -108,25 +108,25 @@ pub fn buildWithWarnings(vm: *VM, source: Source, opts: BuildOptions, warnings: 
     defer vm.runtime.alloc.free(known_globals);
 
     const PipelineResolver = struct {
-        vm: *VM,
+        fs: import_scan.Fs,
         cache: *import_scan.ImportCache,
         fn resolve(ptr: *anyopaque, path: []const u8, a: std.mem.Allocator) ?[]const u8 {
             const self: *@This() = @ptrCast(@alignCast(ptr));
             if (comptime !revo.is_freestanding) {
-                const resolved = (import_scan.resolveModuleFile(self.vm, path) catch return null) orelse return null;
-                defer self.vm.runtime.alloc.free(resolved);
+                const resolved = (import_scan.resolveModuleFileWithFs(self.fs, path) catch return null) orelse return null;
+                defer self.fs.alloc.free(resolved);
                 // shared libs are opaque to the compiler; the module resolves untyped
                 if (std.mem.endsWith(u8, resolved, ".so") or std.mem.endsWith(u8, resolved, ".dylib")) {
                     return null;
                 }
                 if (self.cache.lookup(resolved)) |hit| return a.dupe(u8, hit) catch null;
 
-                return std.Io.Dir.cwd().readFileAlloc(self.vm.runtime.io, resolved, a, std.Io.Limit.unlimited) catch null;
+                return std.Io.Dir.cwd().readFileAlloc(self.fs.io, resolved, a, std.Io.Limit.unlimited) catch null;
             }
             return null;
         }
     };
-    var pipeline_resolver = PipelineResolver{ .vm = vm, .cache = &import_cache };
+    var pipeline_resolver = PipelineResolver{ .fs = import_scan.Fs.fromVm(vm), .cache = &import_cache };
 
     if (try semantic.analyze(
         vm.runtime.alloc,
@@ -164,6 +164,16 @@ pub fn buildWithWarnings(vm: *VM, source: Source, opts: BuildOptions, warnings: 
 pub const Source = struct {
     text: []const u8,
     name: ?[]const u8 = null,
+};
+
+pub const Fs = import_scan.Fs;
+
+pub const Sigs = struct {
+    known_globals: []const []const u8 = &.{},
+
+    pub fn fromVmGlobals(known_globals: []const []const u8) Sigs {
+        return .{ .known_globals = known_globals };
+    }
 };
 
 pub const ParseOptions = struct {

@@ -19,9 +19,31 @@ pub const ImportCache = struct {
     }
 };
 
+pub const Fs = struct {
+    io: std.Io,
+    alloc: std.mem.Allocator,
+    import_dir: ?[]const u8 = null,
+    project_root: []const u8 = "",
+    package_path: []const []const u8 = &.{},
+
+    pub fn fromVm(vm: *VM) Fs {
+        return .{
+            .io = vm.runtime.io,
+            .alloc = vm.runtime.alloc,
+            .import_dir = vm.import_dir,
+            .project_root = vm.project_root,
+            .package_path = vm.package_path.items,
+        };
+    }
+};
+
 /// walk AST and pre-load imported modules (best-effort, OOM propagates, others
 /// are deferred to runtime where the import native fn handles them)
 pub fn preloadImports(vm: *VM, root: *Node, alloc: std.mem.Allocator, cache: *ImportCache) !void {
+    return preloadImportsWithFs(Fs.fromVm(vm), root, alloc, cache);
+}
+
+pub fn preloadImportsWithFs(fs: Fs, root: *Node, alloc: std.mem.Allocator, cache: *ImportCache) !void {
     var inject_nodes = try std.ArrayList(*Node).initCapacity(alloc, 8);
     defer inject_nodes.deinit(alloc);
 
@@ -33,7 +55,7 @@ pub fn preloadImports(vm: *VM, root: *Node, alloc: std.mem.Allocator, cache: *Im
     var visited_sub = std.StringHashMap(void).init(alloc);
     defer visited_sub.deinit();
 
-    try walkAndProcessImports(vm, root, alloc, &inject_nodes, &visited, &visited_sub, cache);
+    try walkAndProcessImportsWithFs(fs, root, alloc, &inject_nodes, &visited, &visited_sub, cache);
 
     if (inject_nodes.items.len > 0 and root.expr == .block) {
         const items = root.expr.block;
@@ -53,8 +75,20 @@ fn walkAndProcessImports(
     visited_sub: *std.StringHashMap(void),
     cache: *ImportCache,
 ) !void {
+    return walkAndProcessImportsWithFs(Fs.fromVm(vm), node, alloc, inject_nodes, visited, visited_sub, cache);
+}
+
+fn walkAndProcessImportsWithFs(
+    fs: Fs,
+    node: *Node,
+    alloc: std.mem.Allocator,
+    inject_nodes: *std.ArrayList(*Node),
+    visited: *std.StringHashMap(void),
+    visited_sub: *std.StringHashMap(void),
+    cache: *ImportCache,
+) !void {
     var visitor = ImportWalkVisitor{
-        .vm = vm,
+        .fs = fs,
         .alloc = alloc,
         .inject_nodes = inject_nodes,
         .visited = visited,
@@ -69,7 +103,7 @@ fn walkAndProcessImports(
 ///   only block|decl|binding recurse, so imports under if/match/fn stay missed
 ///   first error aborts like propagation did, visit just cannot return it
 const ImportWalkVisitor = struct {
-    vm: *VM,
+    fs: Fs,
     alloc: std.mem.Allocator,
     inject_nodes: *std.ArrayList(*Node),
     visited: *std.StringHashMap(void),
@@ -80,8 +114,8 @@ const ImportWalkVisitor = struct {
     pub fn visit(self: *@This(), node: *const Node) void {
         if (self.failed != null) return;
         switch (node.expr) {
-            .import_stmt => |stmt| processImport(
-                self.vm,
+            .import_stmt => |stmt| processImportWithFs(
+                self.fs,
                 stmt.path,
                 stmt.name,
                 self.alloc,
@@ -100,24 +134,32 @@ const ImportWalkVisitor = struct {
 
 /// resolve module path matching runtime import resolution
 pub fn resolveModuleFile(vm: *VM, name: []const u8) !?[]const u8 {
+    return resolveModuleFileWithFs(Fs.fromVm(vm), name);
+}
+
+pub fn resolveModuleFileWithFs(fs: Fs, name: []const u8) !?[]const u8 {
     return revo.resolveImportFile(
-        vm.runtime.io,
-        vm.runtime.alloc,
+        fs.io,
+        fs.alloc,
         name,
-        vm.import_dir,
-        vm.project_root,
-        vm.package_path.items,
+        fs.import_dir,
+        fs.project_root,
+        fs.package_path,
     );
 }
 
 pub fn resolveModuleText(vm: *VM, cache: *ImportCache, path: []const u8, alloc: std.mem.Allocator) !?[]const u8 {
-    const resolved = try resolveModuleFile(vm, path) orelse return null;
-    defer vm.runtime.alloc.free(resolved);
+    return resolveModuleTextWithFs(Fs.fromVm(vm), cache, path, alloc);
+}
+
+pub fn resolveModuleTextWithFs(fs: Fs, cache: *ImportCache, path: []const u8, alloc: std.mem.Allocator) !?[]const u8 {
+    const resolved = try resolveModuleFileWithFs(fs, path) orelse return null;
+    defer fs.alloc.free(resolved);
 
     if (cache.lookup(resolved)) |hit| return hit;
 
     const source = std.Io.Dir.cwd().readFileAlloc(
-        vm.runtime.io,
+        fs.io,
         resolved,
         alloc,
         std.Io.Limit.unlimited,
@@ -133,10 +175,14 @@ pub fn resolveModuleText(vm: *VM, cache: *ImportCache, path: []const u8, alloc: 
 
 /// strict cached read off a resolved path, borrowed from arena
 fn readResolvedCached(vm: *VM, cache: *ImportCache, resolved: []const u8, alloc: std.mem.Allocator) ![]const u8 {
+    return readResolvedCachedWithFs(Fs.fromVm(vm), cache, resolved, alloc);
+}
+
+fn readResolvedCachedWithFs(fs: Fs, cache: *ImportCache, resolved: []const u8, alloc: std.mem.Allocator) ![]const u8 {
     if (cache.lookup(resolved)) |hit| return hit;
 
     const source = try std.Io.Dir.cwd().readFileAlloc(
-        vm.runtime.io,
+        fs.io,
         resolved,
         alloc,
         std.Io.Limit.unlimited,
@@ -159,16 +205,29 @@ fn processImport(
     visited_sub: *std.StringHashMap(void),
     cache: *ImportCache,
 ) !void {
+    return processImportWithFs(Fs.fromVm(vm), path, mod_name, alloc, inject_nodes, visited, visited_sub, cache);
+}
+
+fn processImportWithFs(
+    fs: Fs,
+    path: []const u8,
+    mod_name: []const u8,
+    alloc: std.mem.Allocator,
+    inject_nodes: *std.ArrayList(*Node),
+    visited: *std.StringHashMap(void),
+    visited_sub: *std.StringHashMap(void),
+    cache: *ImportCache,
+) !void {
     if (visited.contains(path)) return;
     try visited.put(path, {});
 
     // non-OOM errors are deferred to runtime,,, preload is best-effort
-    const source = (try resolveModuleText(vm, cache, path, alloc)) orelse return;
+    const source = (try resolveModuleTextWithFs(fs, cache, path, alloc)) orelse return;
 
     const module_ast = Parser.parseSource(alloc, source, .{}) catch return;
 
     extractPubDefs(module_ast, mod_name, alloc, inject_nodes) catch return;
-    extractPubImportsOneLevel(vm, module_ast, mod_name, alloc, inject_nodes, visited_sub, cache) catch return;
+    extractPubImportsOneLevelWithFs(fs, module_ast, mod_name, alloc, inject_nodes, visited_sub, cache) catch return;
 }
 
 /// extract pub macros and procs from a module AST, qualified with prefix
@@ -218,9 +277,21 @@ fn extractPubImportsOneLevel(
     visited_sub: *std.StringHashMap(void),
     cache: *ImportCache,
 ) !void {
+    return extractPubImportsOneLevelWithFs(Fs.fromVm(vm), node, prefix, alloc, inject_nodes, visited_sub, cache);
+}
+
+fn extractPubImportsOneLevelWithFs(
+    fs: Fs,
+    node: *Node,
+    prefix: []const u8,
+    alloc: std.mem.Allocator,
+    inject_nodes: *std.ArrayList(*Node),
+    visited_sub: *std.StringHashMap(void),
+    cache: *ImportCache,
+) !void {
     switch (node.expr) {
         .block => |items| {
-            for (items) |item| try extractPubImportsOneLevel(vm, item, prefix, alloc, inject_nodes, visited_sub, cache);
+            for (items) |item| try extractPubImportsOneLevelWithFs(fs, item, prefix, alloc, inject_nodes, visited_sub, cache);
         },
         .import_stmt => |stmt| {
             if (stmt.pub_) {
@@ -234,16 +305,16 @@ fn extractPubImportsOneLevel(
                 const sub_prefix = try alloc.print( "{s}.{s}", .{ prefix, stmt.name });
                 defer alloc.free(sub_prefix);
 
-                const resolved = try resolveModuleFile(vm, stmt.path) orelse return;
-                defer vm.runtime.alloc.free(resolved);
+                const resolved = try resolveModuleFileWithFs(fs, stmt.path) orelse return;
+                defer fs.alloc.free(resolved);
 
-                const source = try readResolvedCached(vm, cache, resolved, alloc);
+                const source = try readResolvedCachedWithFs(fs, cache, resolved, alloc);
 
                 const sub_ast = try Parser.parseSource(alloc, source, .{});
                 try extractPubDefs(sub_ast, sub_prefix, alloc, inject_nodes);
             }
         },
-        .decl => |d| try extractPubImportsOneLevel(vm, d.inner, prefix, alloc, inject_nodes, visited_sub, cache),
+        .decl => |d| try extractPubImportsOneLevelWithFs(fs, d.inner, prefix, alloc, inject_nodes, visited_sub, cache),
         else => {},
     }
 }
