@@ -66,20 +66,141 @@ pub fn valueReg(v: IrValue) Register {
     };
 }
 
-/// the number of contiguous regs starting at `result_reg` that the
-/// instruction touches in its lowering (call arg blocks)
-/// this is what `maxRegister` adds per instruction: the flat +2 below covers the
-/// fixed-width ops, and the var-length ops (call args,
-/// slice) contribute their real span
-fn spanFor(i: *IrInst) usize {
-    return switch (i.opcode) {
-        .slice => 4,
-        .call, .spawn => i.op_arg + 1,
-        .call_field => (i.op_arg & ~@as(Operand, 1 << 7)) + 2,
-        .table_set, .range_init => 3,
-        .table_get, .table_set_atom, .range_loop, .@"and", .@"or" => 2,
-        else => 1,
-    };
+/// for readRegs/writeRegs/maxRegister
+pub fn regEffects(inst: *const IrInst, reads: ?[]Register, writes: ?*[3]Register) struct { nreads: usize, nwrites: usize, span: usize } {
+    const r = inst.result_reg;
+    switch (inst.opcode) {
+        // zig fmt: off
+        .jump, .yield => return .{ .nreads = 0, .nwrites = 0, .span = 1 },
+
+        .load_user_global, .load_builtin_global, .load_local, .load_upval,
+        .make_closure, .table_new, .load_nil, .load_small_int,
+        .load_const => {
+            if (writes) |out| out[0] = r;
+            return .{ .nreads = 0, .nwrites = 1, .span = 1 };
+        },
+
+        .move => {
+            const src = valueReg(inst.operands[0]);
+            if (reads) |out| out[0] = src;
+            if (writes) |out| out[0] = r;
+            return .{ .nreads = 1, .nwrites = 1, .span = 1 };
+        },
+
+        .range_loop => {
+            std.debug.assert(r >= 3);
+            if (reads) |out| {
+                out[0] = r - 3;
+                out[1] = r - 2;
+                out[2] = r - 1;
+            }
+            if (writes) |out| {
+                out[0] = r;
+                out[1] = r + 1;
+            }
+            const nw: usize = if (inst.operands.len > 0) 2 else 1;
+            return .{ .nreads = 3, .nwrites = nw, .span = 2 };
+        },
+
+        .call, .spawn => {
+            const cnt = inst.op_arg + 1;
+            if (reads) |out| {
+                for (0..cnt) |k| out[k] = r + @as(Register, @intCast(k));
+            }
+            if (writes) |out| out[0] = r;
+            return .{ .nreads = cnt, .nwrites = 1, .span = cnt };
+        },
+
+        .call_field => {
+            const cnt = (inst.op_arg & ~@as(usize, 1 << 7)) + 2;
+            if (reads) |out| {
+                for (0..cnt) |k| out[k] = r + @as(Register, @intCast(k));
+            }
+            if (writes) |out| out[0] = r;
+            return .{ .nreads = cnt, .nwrites = 1, .span = cnt };
+        },
+
+        .halt, .ret, .jump_if_false, .jump_if_true, .jump_err,
+        .store_user_global, .store_user_global_const, .store_upval,
+        .store_local, .bind_local => {
+            if (reads) |out| out[0] = r;
+            return .{ .nreads = 1, .nwrites = 0, .span = 1 };
+        },
+
+        .negate, .not,
+        .add_imm, .sub_imm, .mul_imm,
+        .band_imm, .lt_int_imm, .unwrap_result => {
+            if (reads) |out| out[0] = r;
+            if (writes) |out| out[0] = r;
+            return .{ .nreads = 1, .nwrites = 1, .span = 1 };
+        },
+
+        // the object register comes from the operand, not the result register:
+        // a peephole may point the read at an earlier live load of the object
+        .table_get_atom => {
+            const obj = if (inst.operands.len >= 1) valueReg(inst.operands[0]) else r;
+            if (reads) |out| out[0] = obj;
+            if (writes) |out| out[0] = r;
+            return .{ .nreads = 1, .nwrites = 1, .span = 2 };
+        },
+
+        .table_get, .table_set_atom, .@"and", .@"or" => {
+            if (reads) |out| {
+                out[0] = r;
+                out[1] = r + 1;
+            }
+            if (writes) |out| out[0] = r;
+            return .{ .nreads = 2, .nwrites = 1, .span = 2 };
+        },
+
+        .add, .sub, .mul, .div, .mod, .concat,
+        .band, .bor, .bxor, .shl, .shr, .int_div,
+        .pow, .eq, .neq, .lt, .gt, .lte, .gte,
+        .eq_int, .neq_int, .lt_int, .gt_int, .lte_int, .gte_int => {
+            if (reads) |out| {
+                out[0] = r;
+                out[1] = r + 1;
+            }
+            if (writes) |out| out[0] = r;
+            return .{ .nreads = 2, .nwrites = 1, .span = 1 };
+        },
+
+        .table_set => {
+            if (reads) |out| {
+                out[0] = r;
+                out[1] = r + 1;
+                out[2] = r + 2;
+            }
+            if (writes) |out| out[0] = r;
+            return .{ .nreads = 3, .nwrites = 1, .span = 3 };
+        },
+
+        .range_init => {
+            if (reads) |out| {
+                out[0] = r;
+                out[1] = r + 1;
+                out[2] = r + 2;
+            }
+            if (writes) |out| {
+                out[0] = r;
+                out[1] = r + 1;
+                out[2] = r + 2;
+            }
+            return .{ .nreads = 3, .nwrites = 3, .span = 3 };
+        },
+
+        .slice => {
+            if (reads) |out| {
+                out[0] = r;
+                out[1] = r + 1;
+                out[2] = r + 2;
+                out[3] = r + 3;
+            }
+            if (writes) |out| out[0] = r;
+            return .{ .nreads = 4, .nwrites = 1, .span = 4 };
+        },
+        // zig fmt: on
+    }
 }
 
 /// highest register any instruction touches, plus a 3-wide read/write span
@@ -89,7 +210,7 @@ pub fn maxRegister(insts: []*IrInst) usize {
     for (insts) |inst| {
         const r: usize = inst.result_reg;
         if (r + 2 > max_reg) max_reg = r + 2;
-        const span = spanFor(inst);
+        const span = regEffects(inst, null, null).span;
         if (span > 2 and r + span > max_reg) max_reg = r + span;
     }
     return max_reg;
@@ -144,118 +265,13 @@ pub fn compactIr(self: *Compiler, n: usize, live: []const bool) !void {
 /// reads may be over-estimated (that keeps more code),
 /// so call/call_field read the whole argument range
 pub fn readRegs(inst: *const IrInst, out: []Register) usize {
-    const r = inst.result_reg;
-    switch (inst.opcode) {
-        // zig fmt: off
-        .jump, .yield,
-        .load_user_global, .load_builtin_global, .load_local, .load_upval,
-        .make_closure, .table_new, .load_nil, .load_small_int,
-        .load_const => return 0,
-
-        .move => {
-            out[0] = valueReg(inst.operands[0]);
-            return 1;
-        },
-
-        .range_loop => {
-            std.debug.assert(r >= 3);
-            out[0] = r - 3;
-            out[1] = r - 2;
-            out[2] = r - 1;
-            return 3;
-        },
-
-        .call, .spawn => {
-            const cnt = inst.op_arg + 1;
-            for (0..cnt) |k| out[k] = r + @as(Register, @intCast(k));
-            return cnt;
-        },
-
-        .call_field => {
-            const cnt = (inst.op_arg & ~@as(usize, 1 << 7)) + 2;
-            for (0..cnt) |k| out[k] = r + @as(Register, @intCast(k));
-            return cnt;
-        },
-
-        .halt, .ret, .jump_if_false, .jump_if_true, .jump_err,
-        .store_user_global, .store_user_global_const, .store_upval,
-        .store_local, .bind_local, .negate, .not,
-        .add_imm, .sub_imm, .mul_imm,
-        .band_imm, .lt_int_imm, .unwrap_result => {
-            out[0] = r;
-            return 1;
-        },
-
-        // the object register comes from the operand, not the result register:
-        // a peephole may point the read at an earlier live load of the object
-        .table_get_atom => {
-            if (inst.operands.len >= 1) {
-                out[0] = valueReg(inst.operands[0]);
-            } else out[0] = r;
-            return 1;
-        },
-
-        .add, .sub, .mul, .div, .mod, .concat,
-        .band, .bor, .bxor, .shl, .shr, .int_div,
-        .pow, .eq, .neq, .lt, .gt, .lte, .gte,
-        .eq_int, .neq_int, .lt_int, .gt_int, .lte_int, .gte_int,
-        .@"and", .@"or", .table_get,
-        .table_set_atom => {
-            out[0] = r;
-            out[1] = r + 1;
-            return 2;
-        },
-
-        .table_set, .range_init => {
-            out[0] = r;
-            out[1] = r + 1;
-            out[2] = r + 2;
-            return 3;
-        },
-
-        .slice => {
-            out[0] = r;
-            out[1] = r + 1;
-            out[2] = r + 2;
-            out[3] = r + 3;
-            return 4;
-        },
-        // zig fmt: on
-    }
+    return regEffects(inst, out, null).nreads;
 }
 
 /// registers written by an instruction. must be exact: over-estimating
 /// would kill registers that are still live at runtime
 pub fn writeRegs(inst: *const IrInst, out: *[3]Register) usize {
-    const r = inst.result_reg;
-    switch (inst.opcode) {
-        // zig fmt: off
-        .ret, .halt, .jump, .jump_if_false, .jump_if_true,
-        .jump_err,
-        .store_user_global, .store_user_global_const, .store_upval,
-        .store_local, .bind_local, .yield => return 0,
-
-        .range_init => {
-            out[0] = r;
-            out[1] = r + 1;
-            out[2] = r + 2;
-            return 3;
-        },
-
-        .range_loop => {
-            out[0] = r;
-            if (inst.operands.len > 0) {
-                out[1] = r + 1;
-                return 2;
-            }
-            return 1;
-        },
-        // zig fmt: on
-        else => {
-            out[0] = r;
-            return 1;
-        },
-    }
+    return regEffects(inst, null, out).nwrites;
 }
 
 /// readRegs plus the instruction's `.reg` operands: the complete set of
