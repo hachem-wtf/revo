@@ -64,8 +64,7 @@ pub fn compileExprReport(
     vm: *VM,
     expr: *const Node,
     test_mode: bool,
-    type_annotations: ?*const std.AutoHashMap(*const Node, types.TypeId),
-    type_table: ?*const types.TypeTable,
+    annotations: ?types.Annotations,
 ) !BytecodeResult {
     var arena = std.heap.ArenaAllocator.init(vm.runtime.alloc);
     defer arena.deinit();
@@ -76,8 +75,7 @@ pub fn compileExprReport(
         arena.allocator(),
         vm.runtime.alloc,
     );
-    compiler.type_annotations = type_annotations;
-    compiler.type_table = type_table;
+    compiler.annotations = annotations;
     defer compiler.deinit();
 
     compiler.compileRoot(expr) catch |err| switch (err) {
@@ -124,9 +122,7 @@ pub const Compiler = struct {
     // register cache for upvalue loads, cleared per-block in compileBlock
     upvalue_cache: std.AutoHashMap(usize, usize),
     type_aliases: std.StringHashMap(types.TypeInfo),
-    type_annotations: ?*const std.AutoHashMap(*const Node, types.TypeId) = null,
-    /// table owning the annotated types, set together with type_annotations
-    type_table: ?*const types.TypeTable = null,
+    annotations: ?types.Annotations = null,
     /// annotatedType misses during this build, temporary totality probe
     annotation_misses: usize = 0,
     pending_templates: std.ArrayList(revo.TemplateID),
@@ -185,22 +181,15 @@ pub const Compiler = struct {
 
     // the CheckCtx scope for types.zig inference and eval
     //   has annotations so nested inference reads the table, not live scope
-    //   const-cast is fine in practice,,, CheckCtx never writes the map
     pub fn check(self: *Compiler) types.CheckCtx {
         var ctx = types.CheckCtx.init(self, self.alloc);
-        if (self.type_annotations) |map| {
-            if (self.type_table) |table| {
-                ctx.annotations = .{ .map = @constCast(map), .table = @constCast(table) };
-            }
-        }
+        ctx.annotations = self.annotations;
         return ctx;
     }
 
     pub fn inferExprType(self: *Compiler, node: *const Node) types.TypeInfo {
-        if (self.type_annotations) |map| {
-            if (map.get(node)) |id| {
-                if (self.type_table) |table| return table.get(id);
-            }
+        if (self.annotations) |ann| {
+            if (ann.map.get(node)) |id| return ann.table.get(id);
         }
         return types.inferExprType(self.check(), node);
     }
@@ -208,10 +197,8 @@ pub const Compiler = struct {
     /// pipeline lowering reads this, never live inference
     ///   miss means lowering-synthesized or never-analyzed: safe any fallback
     pub fn annotatedType(self: *Compiler, node: *const Node) types.TypeInfo {
-        if (self.type_annotations) |map| {
-            if (map.get(node)) |id| {
-                if (self.type_table) |table| return table.get(id);
-            }
+        if (self.annotations) |ann| {
+            if (ann.map.get(node)) |id| return ann.table.get(id);
             self.annotation_misses += 1;
         }
         return .{ .tag = .any };
@@ -1478,8 +1465,7 @@ pub const Compiler = struct {
         );
         defer temp_compiler.deinit();
         // comp bodies come from the analyzed tree, so parent annotations hold
-        temp_compiler.type_annotations = self.type_annotations;
-        temp_compiler.type_table = self.type_table;
+        temp_compiler.annotations = self.annotations;
         temp_compiler.compileRoot(expr) catch |err| switch (err) {
             error.CompileFailed => {
                 const nested_failure = try temp_compiler.finishFailure() orelse unreachable;

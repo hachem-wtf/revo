@@ -103,6 +103,7 @@ pub fn buildWithWarnings(vm: *VM, source: Source, opts: BuildOptions, warnings: 
     defer type_annotations.deinit();
     var type_table = compiler.types.TypeTable.init(arena.allocator());
     var scope_graph = scope_graph_mod.ScopeGraph.init(arena.allocator());
+    const annotations = compiler.types.Annotations{ .map = &type_annotations, .table = &type_table };
 
     const known_globals = try knownGlobalsFromVm(vm, vm.runtime.alloc);
     defer vm.runtime.alloc.free(known_globals);
@@ -135,7 +136,7 @@ pub fn buildWithWarnings(vm: *VM, source: Source, opts: BuildOptions, warnings: 
         source.text,
         known_globals,
         null,
-        .{ .map = &type_annotations, .table = &type_table },
+        annotations,
         null,
         .{ .ptr = &pipeline_resolver, .resolveFn = PipelineResolver.resolve },
         &scope_graph,
@@ -154,7 +155,7 @@ pub fn buildWithWarnings(vm: *VM, source: Source, opts: BuildOptions, warnings: 
         .install_debug_info = opts.install_debug_info,
         .source = source,
         .test_mode = opts.test_mode,
-    }, &type_annotations, &type_table);
+    }, annotations);
     return switch (compile_result) {
         .ok => |bytecode| .{ .ok = bytecode },
         .err => |failure| .{ .err = .{ .compile = failure } },
@@ -421,15 +422,13 @@ pub fn compile(
     vm: *VM,
     expanded: Expanded,
     opts: CompileOptions,
-    type_annotations: ?*const std.AutoHashMap(*const Node, compiler.types.TypeId),
-    type_table: ?*const compiler.types.TypeTable,
+    annotations: ?compiler.types.Annotations,
 ) !CompileResult {
     const compiled = try compiler.compileExprReport(
         vm,
         expanded.root,
         opts.test_mode,
-        type_annotations,
-        type_table,
+        annotations,
     );
     return switch (compiled) {
         .ok => |bytecode| blk: {

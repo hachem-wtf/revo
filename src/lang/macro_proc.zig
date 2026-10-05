@@ -432,7 +432,6 @@ fn runDefaultProc(
         root,
         false,
         null,
-        null,
     ) catch return error.ProcCompileFailed;
     const bytecode = switch (bytecode_report) {
         .ok => |ok| ok,
