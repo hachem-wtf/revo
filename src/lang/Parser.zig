@@ -1770,7 +1770,6 @@ fn checkIdentText(self: *Parser, text: []const u8) bool {
 }
 
 fn isStatementBoundary(self: *Parser, left: *const Node) bool {
-    if (self.looksLikeParenAssignStart()) return true;
     if (self.forcesStatementBoundary(left, self.peek().type)) return true;
     if (!expr_start_tokens.get(self.peek().type)) return false;
     return !self.canContinueExpression(left);
@@ -1801,28 +1800,6 @@ fn canContinueExpression(self: *Parser, left: *const Node) bool {
     return false;
 }
 
-fn looksLikeParenAssignStart(self: *Parser) bool {
-    if (!self.stop_on_stmt_start or !self.check(.lparen)) return false;
-
-    var i: usize = self.pos;
-    var depth: u32 = 0;
-    while (i < self.tokens.len) : (i += 1) {
-        const t = self.tokens[i].type;
-        if (t == .lparen) {
-            depth += 1;
-        } else if (t == .rparen) {
-            if (depth == 0) return false;
-            depth -= 1;
-            if (depth == 0) {
-                if (i + 1 >= self.tokens.len) return false;
-                return self.tokens[i + 1].type == .assign;
-            }
-        } else if (t == .eof) return false;
-    }
-    return false;
-}
-
-/// alloc node and set span+expr
 fn allocExpr(self: *Parser, span: Span, expr: Expr) anyerror!*Node {
     const node = try self.alloc.create(Node);
     node.* = .{ .span = span, .expr = expr };
