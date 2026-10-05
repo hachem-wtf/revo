@@ -265,7 +265,8 @@ fn recordError(self: *Parser, kind: Kind, message: []const u8, span: ast.Span) !
         self.first_error_kind = kind;
         self.first_error_message = message;
     }
-    try diagnostic.appendErrorPair(&self.errors, self.alloc, owned, span);
+    try self.errors.append(self.alloc, .{ .@"error" = owned });
+    try self.errors.append(self.alloc, .{ .span = .{ .span = span, .role = .primary } });
     try self.error_depths.append(self.alloc, self.depth);
 }
 

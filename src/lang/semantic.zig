@@ -2149,12 +2149,14 @@ const SemanticChecker = struct {
     }
 
     fn appendError(self: *SemanticChecker, message: []const u8, span: ast.Span, label: []const u8) !void {
-        try diagnostic.appendErrorLabelPair(&self.errors, self.alloc, message, span, try self.alloc.dupe(u8, label));
+        try self.errors.append(self.alloc, .{ .@"error" = message });
+        try self.errors.append(self.alloc, .{ .span = .{ .span = span, .role = .primary, .message = try self.alloc.dupe(u8, label) } });
     }
 
     fn appendWarn(self: *SemanticChecker, message: []const u8, span: ast.Span, label: []const u8, code: []const u8) !void {
         if (self.first_warn_code == null) self.first_warn_code = code;
-        try diagnostic.appendWarnPair(&self.warn_parts, self.alloc, message, span, try self.alloc.dupe(u8, label));
+        try self.warn_parts.append(self.alloc, .{ .warn = message });
+        try self.warn_parts.append(self.alloc, .{ .span = .{ .span = span, .role = .primary, .message = try self.alloc.dupe(u8, label) } });
     }
 };
 

@@ -189,44 +189,8 @@ pub const Report = struct {
     }
 };
 
-/// one `Part{error}` + `Part{span primary}` pair
-///   slices stored as given, never duped, caller owns the text
-pub fn appendErrorPair(
-    list: *std.ArrayList(Part),
-    alloc: std.mem.Allocator,
-    message: []const u8,
-    span: ast.Span,
-) !void {
-    try list.append(alloc, .{ .@"error" = message });
-    try list.append(alloc, .{ .span = .{ .span = span, .role = .primary } });
-}
-
-/// same pair with a span label, stored as given like message
-pub fn appendErrorLabelPair(
-    list: *std.ArrayList(Part),
-    alloc: std.mem.Allocator,
-    message: []const u8,
-    span: ast.Span,
-    label: []const u8,
-) !void {
-    try list.append(alloc, .{ .@"error" = message });
-    try list.append(alloc, .{ .span = .{ .span = span, .role = .primary, .message = label } });
-}
-
-/// warn twin of the label pair, reports carry one message either way
-pub fn appendWarnPair(
-    list: *std.ArrayList(Part),
-    alloc: std.mem.Allocator,
-    message: []const u8,
-    span: ast.Span,
-    label: []const u8,
-) !void {
-    try list.append(alloc, .{ .warn = message });
-    try list.append(alloc, .{ .span = .{ .span = span, .role = .primary, .message = label } });
-}
-
 /// incremental pair builder for standalone reports
-///   same pairs as above, finish takes message + severity explicitly
+///   same pairs as below, finish takes message + severity explicitly
 ///   code and source stay null here, caller sets what it knows
 pub const DiagnosticBuilder = struct {
     alloc: std.mem.Allocator,
@@ -245,15 +209,18 @@ pub const DiagnosticBuilder = struct {
     }
 
     pub fn err(self: *DiagnosticBuilder, message: []const u8, span: ast.Span) !void {
-        try appendErrorPair(&self.parts, self.alloc, message, span);
+        try self.parts.append(self.alloc, .{ .@"error" = message });
+        try self.parts.append(self.alloc, .{ .span = .{ .span = span, .role = .primary } });
     }
 
     pub fn errLabel(self: *DiagnosticBuilder, message: []const u8, span: ast.Span, label: []const u8) !void {
-        try appendErrorLabelPair(&self.parts, self.alloc, message, span, label);
+        try self.parts.append(self.alloc, .{ .@"error" = message });
+        try self.parts.append(self.alloc, .{ .span = .{ .span = span, .role = .primary, .message = label } });
     }
 
     pub fn warn(self: *DiagnosticBuilder, message: []const u8, span: ast.Span, label: []const u8) !void {
-        try appendWarnPair(&self.parts, self.alloc, message, span, label);
+        try self.parts.append(self.alloc, .{ .warn = message });
+        try self.parts.append(self.alloc, .{ .span = .{ .span = span, .role = .primary, .message = label } });
     }
 
     pub fn finish(self: *DiagnosticBuilder, message: []const u8, severity: Severity) !Report {
