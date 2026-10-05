@@ -258,8 +258,8 @@ pub fn predeclare(self: *Compiler, exprs: []const *Node) !void {
                 if (decl.kind == .declare_decl) continue;
                 const key = ast.bareName(t);
                 if (self.type_aliases.contains(key)) continue;
-                const type_info = try types.evalTypeExpr(self.check(), t.type_expr);
-                try self.type_aliases.put(key, type_info);
+                const type_info = try types.evalTypeExpr(self.aliasScope(), t.type_expr);
+                try self.type_aliases.put(key, .{ .info = type_info });
             },
             .binding => |binding| {
                 if (binding.target.expr != .ident or binding.value.expr != .fn_expr) continue;

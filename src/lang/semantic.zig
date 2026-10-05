@@ -184,7 +184,7 @@ const SemanticChecker = struct {
     /// non-failing diagnostics; emitted alongside success, dropped on error
     warn_parts: std.ArrayList(diagnostic.Part),
     scopes: std.ArrayList(Scope),
-    type_aliases: std.StringHashMap(Entry),
+    type_aliases: std.StringHashMap(types_mod.Alias),
     /// caller-owned out-map: declared name -> doc text, last declare wins
     docs: ?*std.StringHashMap([]const u8),
     /// one sig per baselib spec, keyed by the spec's const-storage address
@@ -297,7 +297,7 @@ const SemanticChecker = struct {
                     if (!gop.found_existing) gop.value_ptr.* = std.StringHashMap(types_mod.TypeInfo).init(checker.alloc);
                     try gop.value_ptr.put(s.name, t);
                 } else {
-                    const entry: Entry = .{ .info = t, .doc = if (s.doc.len > 0) s.doc else null };
+                    const entry: types_mod.Alias = .{ .info = t, .doc = if (s.doc.len > 0) s.doc else null };
                     try checker.type_aliases.put(s.name, entry);
                 }
             }
@@ -495,12 +495,24 @@ const SemanticChecker = struct {
             i -= 1;
             if (self.scopes.items[i].values.get(name)) |v| return v;
         }
-        return self.type_aliases.get(name);
+        if (self.type_aliases.get(name)) |a| return .{ .info = a.info, .doc = a.doc };
+        return null;
     }
 
     // the CheckCtx scope for types.zig inference and eval
     pub fn check(self: *SemanticChecker) types_mod.CheckCtx {
-        return types_mod.CheckCtx.init(self, self.alloc);
+        var ctx = types_mod.CheckCtx.init(self, self.alloc);
+        ctx.scope = self.aliasScope();
+        return ctx;
+    }
+
+    pub fn aliasScope(self: *SemanticChecker) types_mod.AliasScope {
+        return .{
+            .alloc = self.alloc,
+            .type_params = self.current_type_params,
+            .aliases = &self.type_aliases,
+            .imports = &self.import_aliases,
+        };
     }
 
     pub fn inferIdentType(self: *SemanticChecker, name: []const u8) types_mod.TypeInfo {
@@ -514,15 +526,6 @@ const SemanticChecker = struct {
         defer self.current_type_params = saved;
         const sig = self.makeFnSig(.{ .params = params, .return_type = return_type, .type_params = type_params, .doc = doc }) catch return .{ .tag = .any };
         return .{ .tag = .{ .function = sig } };
-    }
-
-    pub fn resolveTypeAlias(self: *SemanticChecker, name: []const u8) ?types_mod.TypeInfo {
-        return (self.type_aliases.get(name) orelse return null).info;
-    }
-
-    pub fn resolveImportAlias(self: *SemanticChecker, module: []const u8, name: []const u8) ?types_mod.TypeInfo {
-        const aliases = self.import_aliases.get(module) orelse return null;
-        return aliases.get(name);
     }
 
     pub fn inferCallReturnType(
@@ -610,7 +613,7 @@ const SemanticChecker = struct {
     /// user annotation: validate qualified names, then evaluate
     fn evalCheckedTypeExpr(self: *SemanticChecker, te: *const ast.TypeExpr) !types_mod.TypeInfo {
         try self.checkQualifiedTypes(te);
-        return try types_mod.evalTypeExpr(self.check(), te);
+        return try types_mod.evalTypeExpr(self.aliasScope(), te);
     }
 
     pub fn inferFieldType(self: *SemanticChecker, object: *const ast.Node, name: []const u8) types_mod.TypeInfo {
@@ -701,7 +704,7 @@ const SemanticChecker = struct {
 
         for (ft.params) |p| {
             try param_names.append(self.alloc, p.name);
-            try param_types.append(self.alloc, if (p.type_name) |tn| types_mod.evalTypeExpr(self.check(), tn) catch types_mod.TypeInfo{ .tag = .any } else types_mod.TypeInfo{ .tag = .any });
+            try param_types.append(self.alloc, if (p.type_name) |tn| types_mod.evalTypeExpr(self.aliasScope(), tn) catch types_mod.TypeInfo{ .tag = .any } else types_mod.TypeInfo{ .tag = .any });
         }
 
         const names_slice = try param_names.toOwnedSlice(self.alloc);
@@ -710,7 +713,7 @@ const SemanticChecker = struct {
         // required is the host arity, not the `?` flags, since baselib
         // spells optionals as nilable; the fixed prefix is a floor on top,
         //   so `zip(a, b, rest...)` still wants two. keep in sync
-        const ret = if (ft.return_type) |r| types_mod.evalTypeExpr(self.check(), r) catch types_mod.TypeInfo{ .tag = .any } else types_mod.TypeInfo{ .tag = .any };
+        const ret = if (ft.return_type) |r| types_mod.evalTypeExpr(self.aliasScope(), r) catch types_mod.TypeInfo{ .tag = .any } else types_mod.TypeInfo{ .tag = .any };
         const sig = try types_mod.newSignature(self.alloc, .{
             .param_names = names_slice,
             .params = types_slice,
@@ -955,7 +958,7 @@ const SemanticChecker = struct {
                         }
                     }
 
-                    const arm_covers = try types_mod.buildArmCovers(self.check(), arm);
+                    const arm_covers = try types_mod.buildArmCovers(self.aliasScope(), arm);
                     defer self.alloc.free(arm_covers);
 
                     // degenerate subject, every arm is trivially dead; do notih
@@ -995,7 +998,7 @@ const SemanticChecker = struct {
                                             // but what can i even do
                                         }
                                         if (e.expr == .ascribed) {
-                                            const ti = types_mod.evalTypeExpr(self.check(), e.expr.ascribed.type_name) catch break :sub false;
+                                            const ti = types_mod.evalTypeExpr(self.aliasScope(), e.expr.ascribed.type_name) catch break :sub false;
                                             break :sub types_mod.matchCoversAll(ti, covered.items);
                                         }
                                         if (patternLitType(e)) |lt| break :sub types_mod.matchCoversAll(lt, covered.items);
@@ -1292,13 +1295,6 @@ const SemanticChecker = struct {
         return .{ .tag = .any };
     }
 
-    pub fn isTypeParam(self: *SemanticChecker, name: []const u8) bool {
-        for (self.current_type_params) |tp| {
-            if (std.mem.eql(u8, tp, name)) return true;
-        }
-        return false;
-    }
-
     fn analyzeFnExpr(self: *SemanticChecker, fn_expr: anytype, span: ast.Span) !types_mod.TypeInfo {
         _ = span;
         const combined = try types_mod.combinedTypeParams(self.alloc, fn_expr.type_params, fn_expr.params);
@@ -1472,7 +1468,7 @@ const SemanticChecker = struct {
                 }
             },
             .ascribed => |a| {
-                const inner_ti = types_mod.evalTypeExpr(self.check(), a.type_name) catch
+                const inner_ti = types_mod.evalTypeExpr(self.aliasScope(), a.type_name) catch
                     types_mod.TypeInfo{ .tag = .any };
 
                 if (a.expr.expr == .ident and !ast.isDiscardName(a.expr.expr.ident)) {
@@ -1509,7 +1505,7 @@ const SemanticChecker = struct {
 
             if (item.expr == .ascribed) {
                 const a = item.expr.ascribed;
-                const expected = types_mod.evalTypeExpr(self.check(), a.type_name) catch types_mod.TypeInfo{ .tag = .any };
+                const expected = types_mod.evalTypeExpr(self.aliasScope(), a.type_name) catch types_mod.TypeInfo{ .tag = .any };
 
                 if (!types_mod.canCoerce(elem, expected)) {
                     const name = if (a.expr.expr == .ident) a.expr.expr.ident else "?";
@@ -1580,7 +1576,7 @@ const SemanticChecker = struct {
         //   ; and win over union narrowing
         if (pattern.expr == .ascribed) {
             const a = pattern.expr.ascribed;
-            const inner_ti = types_mod.evalTypeExpr(self.check(), a.type_name) catch types_mod.TypeInfo{ .tag = .any };
+            const inner_ti = types_mod.evalTypeExpr(self.aliasScope(), a.type_name) catch types_mod.TypeInfo{ .tag = .any };
 
             if (a.expr.expr == .ident and !ast.isDiscardName(a.expr.expr.ident)) {
                 try self.declare(a.expr.expr.ident, inner_ti, null, .binding);

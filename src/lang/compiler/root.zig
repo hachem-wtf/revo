@@ -121,7 +121,7 @@ pub const Compiler = struct {
     value_stack: std.ArrayList(*ir.IrInst),
     // register cache for upvalue loads, cleared per-block in compileBlock
     upvalue_cache: std.AutoHashMap(usize, usize),
-    type_aliases: std.StringHashMap(types.TypeInfo),
+    type_aliases: std.StringHashMap(types.Alias),
     annotations: ?types.Annotations = null,
     /// annotatedType misses during this build, temporary totality probe
     annotation_misses: usize = 0,
@@ -154,7 +154,7 @@ pub const Compiler = struct {
             .ir_builder = try ir.IrBuilder.init(arena),
             .value_stack = try std.ArrayList(*ir.IrInst).initCapacity(arena, 32),
             .upvalue_cache = std.AutoHashMap(usize, usize).init(arena),
-            .type_aliases = std.StringHashMap(types.TypeInfo).init(arena),
+            .type_aliases = std.StringHashMap(types.Alias).init(arena),
             .declared_globals = std.StringHashMap(void).init(arena),
             .pending_templates = try std.ArrayList(revo.TemplateID).initCapacity(arena, 4),
             .masking_stack = try std.ArrayList([]const u8).initCapacity(arena, 4),
@@ -184,7 +184,17 @@ pub const Compiler = struct {
     pub fn check(self: *Compiler) types.CheckCtx {
         var ctx = types.CheckCtx.init(self, self.alloc);
         ctx.annotations = self.annotations;
+        ctx.scope = self.aliasScope();
         return ctx;
+    }
+
+    pub fn aliasScope(self: *Compiler) types.AliasScope {
+        const fn_state = state_mod.currentFunctionState(self);
+        return .{
+            .alloc = self.alloc,
+            .type_params = if (fn_state) |st| st.type_params else &.{},
+            .aliases = &self.type_aliases,
+        };
     }
 
     pub fn inferExprType(self: *Compiler, node: *const Node) types.TypeInfo {
@@ -213,7 +223,7 @@ pub const Compiler = struct {
     }
 
     fn inferTypeMap(self: *Compiler, name: []const u8) types.TypeInfo {
-        if (self.type_aliases.get(name)) |aliased| return aliased;
+        if (self.type_aliases.get(name)) |aliased| return aliased.info;
         return .{ .tag = .any };
     }
 
@@ -279,24 +289,6 @@ pub const Compiler = struct {
         ) catch return .{ .tag = .any };
 
         return .{ .tag = .{ .function = sig } };
-    }
-
-    pub fn resolveTypeAlias(self: *Compiler, name: []const u8) ?types.TypeInfo {
-        return self.type_aliases.get(name);
-    }
-
-    /// cant do it
-    /// no io dep in the compiler
-    /// sema validates first anwyays so degraditn to any cant false-error
-    pub fn resolveImportAlias(_: *Compiler, _: []const u8, _: []const u8) ?types.TypeInfo {
-        return null;
-    }
-
-    pub fn isTypeParam(self: *Compiler, name: []const u8) bool {
-        const fn_state = state_mod.currentFunctionState(self) orelse return false;
-        for (fn_state.type_params) |tp|
-            if (std.mem.eql(u8, tp, name)) return true;
-        return false;
     }
 
     pub fn finishBytecode(self: *Compiler) !Bytecode {
@@ -999,10 +991,10 @@ pub const Compiler = struct {
                 try self.pushNil();
             },
             .type_alias => |t| {
-                const type_info = types.evalTypeExpr(self.check(), t.type_expr) catch |err| switch (err) {
+                const type_info = types.evalTypeExpr(self.aliasScope(), t.type_expr) catch |err| switch (err) {
                     error.OutOfMemory => return error.OutOfMemory,
                 };
-                try self.type_aliases.put(ast.bareName(t), type_info);
+                try self.type_aliases.put(ast.bareName(t), .{ .info = type_info });
                 try self.pushNil();
             },
             .proc_macro => return self.fail(
@@ -1563,7 +1555,7 @@ pub const Compiler = struct {
             } else try self.compile(binding.value, true);
 
             const inferred_type = if (binding.type_name) |tn|
-                try types.evalTypeExpr(self.check(), tn)
+                try types.evalTypeExpr(self.aliasScope(), tn)
             else
                 self.annotatedType(binding.value);
             try state_mod.setLocalTypeHint(self, name, inferred_type);
@@ -1686,7 +1678,7 @@ pub const Compiler = struct {
                 .slot = @intCast(idx),
                 .mutable = true,
                 .initialized = true,
-                .type_info = if (param.type_name) |tn| try types.evalTypeExpr(self.check(), tn) else null,
+                .type_info = if (param.type_name) |tn| try types.evalTypeExpr(self.aliasScope(), tn) else null,
                 .type_explicit = param.type_name != null,
             };
             try fn_state.locals.append(self.alloc, local);
@@ -1694,7 +1686,7 @@ pub const Compiler = struct {
             if (param.type_name) |type_name| {
                 try fn_state.type_hints.append(self.alloc, .{
                     .name = param.name,
-                    .type_info = try types.evalTypeExpr(self.check(), type_name),
+                    .type_info = try types.evalTypeExpr(self.aliasScope(), type_name),
                 });
             }
         }

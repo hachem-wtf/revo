@@ -5,7 +5,7 @@
 //! TypeInfo -> text in printType. TypeExpr printing, cloning, and freeing
 //! live next to the TypeExpr definition in ast.zig (pure ast operations),
 //! and TypeExpr -> TypeInfo evaluation lives in compiler/types.zig next to
-//! inference (it needs a CheckCtx scope, same as everything there).
+//! inference (it takes an AliasScope filled from the caller's maps).
 //! type refs flow one way: here -> ast, here -> compiler/types
 //!
 

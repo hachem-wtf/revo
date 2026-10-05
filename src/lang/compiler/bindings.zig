@@ -62,7 +62,7 @@ pub fn compileLocalBinding(
     locals.markLocalInitialized(self, slot);
 
     const inferred_type = if (type_name) |tn|
-        try types_mod.evalTypeExpr(self.check(), tn)
+        try types_mod.evalTypeExpr(self.aliasScope(), tn)
     else
         self.annotatedType(value);
 

@@ -122,7 +122,7 @@ pub fn compileRangeLoopBody(
     if (params.len >= 1 and !ast.isDiscardName(params[0].name)) {
         value_slot = try locals.declareLocal(self, params[0].name, false);
         if (params[0].type_name) |tn| {
-            const declared = try types_mod.evalTypeExpr(self.check(), tn);
+            const declared = try types_mod.evalTypeExpr(self.aliasScope(), tn);
             if (declared.tag != .number) {
                 const msg = try self.alloc.print(
                     "range loop variable must be num, got {s}",
@@ -138,7 +138,7 @@ pub fn compileRangeLoopBody(
     if (params.len == 2 and !ast.isDiscardName(params[1].name)) {
         index_slot = try locals.declareLocal(self, params[1].name, false);
         if (params[1].type_name) |tn| {
-            const declared = try types_mod.evalTypeExpr(self.check(), tn);
+            const declared = try types_mod.evalTypeExpr(self.aliasScope(), tn);
             if (declared.tag != .number) {
                 const msg = try self.alloc.print(
                     "range loop variable must be num, got {s}",
@@ -640,7 +640,7 @@ pub fn compilePatternChecks(
         .ascribed => |a| {
             // type check first, then the inner pattern
             //   ; fail fast
-            const asc_ti = types_mod.evalTypeExpr(self.check(), a.type_name) catch types_mod.TypeInfo{ .tag = .any };
+            const asc_ti = types_mod.evalTypeExpr(self.aliasScope(), a.type_name) catch types_mod.TypeInfo{ .tag = .any };
 
             const type_fails = try compileTypeSatisfies(self, subject, asc_ti);
             defer self.alloc.free(type_fails);
@@ -1020,7 +1020,7 @@ fn typeNameInfo(name: []const u8) ?types_mod.TypeInfo {
 
 fn patternTypeInfo(self: *Compiler, pattern: *const Node) ?types_mod.TypeInfo {
     return switch (pattern.expr) {
-        .ascribed => |a| types_mod.evalTypeExpr(self.check(), a.type_name) catch null,
+        .ascribed => |a| types_mod.evalTypeExpr(self.aliasScope(), a.type_name) catch null,
         .number => .{ .tag = .number },
         .string, .multiline_string => .{ .tag = .string },
         .atom => |name| .{ .tag = .{ .atom = name } },
@@ -1071,7 +1071,7 @@ fn narrowMatchPattern(
         const a = pattern.expr.ascribed;
 
         if (a.expr.expr == .ident and !ast.isDiscardName(a.expr.expr.ident)) {
-            const ti = types_mod.evalTypeExpr(self.check(), a.type_name) catch types_mod.TypeInfo{ .tag = .any };
+            const ti = types_mod.evalTypeExpr(self.aliasScope(), a.type_name) catch types_mod.TypeInfo{ .tag = .any };
             try locals.setLocalTypeHint(self, a.expr.expr.ident, ti);
 
             return;
@@ -1092,7 +1092,7 @@ fn narrowMatchPattern(
         const a = item.expr.ascribed;
 
         if (a.expr.expr == .ident and !ast.isDiscardName(a.expr.expr.ident)) {
-            const ti = types_mod.evalTypeExpr(self.check(), a.type_name) catch types_mod.TypeInfo{ .tag = .any };
+            const ti = types_mod.evalTypeExpr(self.aliasScope(), a.type_name) catch types_mod.TypeInfo{ .tag = .any };
             try locals.setLocalTypeHint(self, a.expr.expr.ident, ti);
         }
     }
@@ -1117,7 +1117,7 @@ fn narrowMatchPattern(
                 const a = item.expr.ascribed;
 
                 if (a.expr.expr == .ident and !ast.isDiscardName(a.expr.expr.ident)) {
-                    const ti = types_mod.evalTypeExpr(self.check(), a.type_name) catch types_mod.TypeInfo{ .tag = .any };
+                    const ti = types_mod.evalTypeExpr(self.aliasScope(), a.type_name) catch types_mod.TypeInfo{ .tag = .any };
                     try locals.setLocalTypeHint(self, a.expr.expr.ident, ti);
                 }
 

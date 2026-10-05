@@ -227,7 +227,7 @@ pub fn requiredCount(params: []const ast.FnParam) usize {
 
 /// shared eval for scopes needing no validation
 fn evalInScope(ctx: anytype, te: *const ast.TypeExpr) !TypeInfo {
-    return evalTypeExpr(ctx.check(), te);
+    return evalTypeExpr(ctx.aliasScope(), te);
 }
 
 /// buildFnSig flags, both off for semantic strict mode
@@ -291,12 +291,6 @@ pub fn buildFnSig(
 
 /// the single inference interface every scope implements
 ///
-/// BareCtx degrades unknown names to any; ModuleCtx resolves dep-local
-/// aliases; SemanticChecker resolves with lexical scope; Compiler resolves
-/// with annotations and locals. generic type computation (inferExprType,
-/// evalTypeExpr, cover building) takes this, never anytype, so changing
-/// the interface breaks all four implementors at build time instead of
-/// drifting silently. each scope gets a one-line `check()` returning this.
 pub const CheckCtx = struct {
     ptr: *anyopaque,
     vtable: *const VTable,
@@ -304,35 +298,22 @@ pub const CheckCtx = struct {
     /// annotations to consult before live inference, set only by Compiler
     ///   semantic and import scopes analyze with null and infer everything
     annotations: ?Annotations = null,
+    /// eval data for the scope, filled by check() from producer maps
+    scope: AliasScope,
 
     pub const VTable = struct {
-        isTypeParam: *const fn (ptr: *anyopaque, name: []const u8) bool,
-        resolveTypeAlias: *const fn (ptr: *anyopaque, name: []const u8) ?TypeInfo,
-        resolveImportAlias: *const fn (ptr: *anyopaque, module: []const u8, name: []const u8) ?TypeInfo,
         inferIdentType: *const fn (ptr: *anyopaque, name: []const u8) TypeInfo,
         inferCallReturnType: *const fn (ptr: *anyopaque, callee: *const ast.Node, args: []const *ast.Node, type_args: []const []const u8, implicit_self: bool) TypeInfo,
         inferFieldType: *const fn (ptr: *anyopaque, object: *const ast.Node, name: []const u8) TypeInfo,
         inferFnType: *const fn (ptr: *anyopaque, params: []const ast.FnParam, return_type: ?*ast.TypeExpr, type_params: []const []const u8, doc: ?[]const u8) TypeInfo,
     };
 
-    /// wrap any scope implementing the seven vtable methods
+    /// wrap any scope implementing the four vtable methods
     /// scope must be a pointer; receivers may be mutable or const
     /// the vtable lives in static storage per scope type, never on the stack
     pub fn init(scope: anytype, alloc: std.mem.Allocator) CheckCtx {
         const S = @TypeOf(scope);
         const V = struct {
-            fn vtIsTypeParam(p: *anyopaque, name: []const u8) bool {
-                const s: S = @ptrCast(@alignCast(p));
-                return s.isTypeParam(name);
-            }
-            fn vtResolveTypeAlias(p: *anyopaque, name: []const u8) ?TypeInfo {
-                const s: S = @ptrCast(@alignCast(p));
-                return s.resolveTypeAlias(name);
-            }
-            fn vtResolveImportAlias(p: *anyopaque, module: []const u8, name: []const u8) ?TypeInfo {
-                const s: S = @ptrCast(@alignCast(p));
-                return s.resolveImportAlias(module, name);
-            }
             fn vtInferIdentType(p: *anyopaque, name: []const u8) TypeInfo {
                 const s: S = @ptrCast(@alignCast(p));
                 return s.inferIdentType(name);
@@ -350,9 +331,6 @@ pub const CheckCtx = struct {
                 return s.inferFnType(params, return_type, type_params, doc);
             }
             const vtable: VTable = .{
-                .isTypeParam = vtIsTypeParam,
-                .resolveTypeAlias = vtResolveTypeAlias,
-                .resolveImportAlias = vtResolveImportAlias,
                 .inferIdentType = vtInferIdentType,
                 .inferCallReturnType = vtInferCallReturnType,
                 .inferFieldType = vtInferFieldType,
@@ -363,19 +341,8 @@ pub const CheckCtx = struct {
             .ptr = scope,
             .alloc = alloc,
             .vtable = &V.vtable,
+            .scope = undefined,
         };
-    }
-
-    pub fn isTypeParam(self: CheckCtx, name: []const u8) bool {
-        return self.vtable.isTypeParam(self.ptr, name);
-    }
-
-    pub fn resolveTypeAlias(self: CheckCtx, name: []const u8) ?TypeInfo {
-        return self.vtable.resolveTypeAlias(self.ptr, name);
-    }
-
-    pub fn resolveImportAlias(self: CheckCtx, module: []const u8, name: []const u8) ?TypeInfo {
-        return self.vtable.resolveImportAlias(self.ptr, module, name);
     }
 
     pub fn inferIdentType(self: CheckCtx, name: []const u8) TypeInfo {
@@ -395,47 +362,9 @@ pub const CheckCtx = struct {
     }
 };
 
-/// empty scope for tooling
-/// no aliases, no generics, no imports, etc
-/// unknown names degrade
-pub const BareCtx = struct {
-    alloc: std.mem.Allocator,
-    pub fn check(self: *BareCtx) CheckCtx {
-        return CheckCtx.init(self, self.alloc);
-    }
-    pub fn isTypeParam(_: *const BareCtx, _: []const u8) bool {
-        return false;
-    }
-    pub fn resolveTypeAlias(_: *BareCtx, _: []const u8) ?TypeInfo {
-        return null;
-    }
-
-    /// bare ctx has no module scope, so qualified types always degrade
-    pub fn resolveImportAlias(_: *BareCtx, _: []const u8, _: []const u8) ?TypeInfo {
-        return null;
-    }
-
-    pub fn inferIdentType(_: *BareCtx, _: []const u8) TypeInfo {
-        return .{ .tag = .any };
-    }
-
-    pub fn inferCallReturnType(_: *BareCtx, _: *const ast.Node, _: []const *ast.Node, _: []const []const u8, _: bool) TypeInfo {
-        return .{ .tag = .any };
-    }
-
-    pub fn inferFieldType(_: *BareCtx, _: *const ast.Node, _: []const u8) TypeInfo {
-        return .{ .tag = .any };
-    }
-
-    pub fn inferFnType(_: *BareCtx, _: []const ast.FnParam, _: ?*ast.TypeExpr, _: []const []const u8, _: ?[]const u8) TypeInfo {
-        return .{ .tag = .any };
-    }
-};
-
 /// one-shot eval with no scope: tooling convenience (hover, sig previews)
 pub fn evalBare(alloc: std.mem.Allocator, te: *const ast.TypeExpr) !TypeInfo {
-    var bare = BareCtx{ .alloc = alloc };
-    return evalTypeExpr(bare.check(), te);
+    return evalTypeExpr(.{ .alloc = alloc }, te);
 }
 
 /// sentinel "any function" type,,, matches any callable value
@@ -573,6 +502,37 @@ pub const TypeId = u32;
 pub const Annotations = struct {
     map: *std.AutoHashMap(*const ast.Node, TypeId),
     table: *TypeTable,
+};
+
+pub const Alias = struct {
+    info: TypeInfo,
+    doc: ?[]const u8 = null,
+};
+
+/// everything evalTypeExpr resolves, no behavior producers fill it from their own maps
+///   empty means degrade to any
+pub const AliasScope = struct {
+    alloc: std.mem.Allocator,
+    type_params: []const []const u8 = &.{},
+    aliases: ?*const std.StringHashMap(Alias) = null,
+    imports: ?*const std.StringHashMap(std.StringHashMap(TypeInfo)) = null,
+
+    pub fn isTypeParam(self: AliasScope, name: []const u8) bool {
+        for (self.type_params) |tp| if (std.mem.eql(u8, tp, name)) return true;
+        return false;
+    }
+
+    pub fn resolveTypeAlias(self: AliasScope, name: []const u8) ?TypeInfo {
+        const aliases = self.aliases orelse return null;
+        const found = aliases.get(name) orelse return null;
+        return found.info;
+    }
+
+    pub fn resolveImportAlias(self: AliasScope, module: []const u8, name: []const u8) ?TypeInfo {
+        const imports = self.imports orelse return null;
+        const aliases = imports.get(module) orelse return null;
+        return aliases.get(name);
+    }
 };
 
 /// dedup store for canonical TypeInfo trees
@@ -837,7 +797,7 @@ pub fn inferMatchType(ctx: CheckCtx, subject: *const ast.Node, arms: []const ast
 
     // miss falls through to nil at runtime
     // so a non-exhaustive match always carries :nil in its type
-    if (!matchCovers(ctx, subject_type, arms)) {
+    if (!matchCovers(ctx.scope, subject_type, arms)) {
         result = withNilMiss(ctx.alloc, result);
     }
     return result;
@@ -974,10 +934,11 @@ pub const type_name_map: std.StaticStringMap(TypeInfo) = std.StaticStringMap(Typ
     .{ "never", TypeInfo{ .tag = .never } },
 });
 
-pub fn resolveTypeName(ctx: CheckCtx, name: []const u8) TypeInfo {
+pub fn resolveTypeName(scope: AliasScope, name: []const u8) TypeInfo {
     if (type_name_map.get(name)) |res| return res;
     if (name.len > 0 and name[0] == ':') return .{ .tag = .{ .atom = name } };
-    if (ctx.resolveTypeAlias(name)) |aliased| return aliased;
+
+    if (scope.resolveTypeAlias(name)) |aliased| return aliased;
     return .{ .tag = .any };
 }
 
@@ -1079,7 +1040,7 @@ fn inferTableType(ctx: CheckCtx, entries: []const ast.TableEntry) TypeInfo {
             }
         } else {
             // keyless/implicit entries are numeric fields
-            const idx_name = ctx.alloc.print( "{d}", .{array_index}) catch return .{ .tag = .any };
+            const idx_name = ctx.alloc.print("{d}", .{array_index}) catch return .{ .tag = .any };
             array_index += 1;
             fields.append(ctx.alloc, .{ .name = idx_name, .field_type = field_type }) catch return .{ .tag = .any };
             saw_implicit_key = true;
@@ -1141,20 +1102,20 @@ pub fn inferBlockResultType(ctx: CheckCtx, exprs: []const *ast.Node) TypeInfo {
 /// every TypeExpr kind must be handled here; this is the single place where AST type
 /// nodes becomes semantic TypeInfo values. mirrors ast.printTypeExpr
 /// ctx is any CheckCtx scope: aliases resolve in the caller's scope
-pub fn evalTypeExpr(ctx: CheckCtx, te: *const ast.TypeExpr) !TypeInfo {
+pub fn evalTypeExpr(scope: AliasScope, te: *const ast.TypeExpr) !TypeInfo {
     switch (te.kind) {
         // "number" -> int (from type_name_map), unknown names -> any
         .named => |name| {
-            if (ctx.isTypeParam(name)) return .{ .tag = .{ .type_var = name } };
+            if (scope.isTypeParam(name)) return .{ .tag = .{ .type_var = name } };
             if (type_name_map.get(name)) |res| return res;
-            if (ctx.resolveTypeAlias(name)) |aliased| return aliased;
+            if (scope.resolveTypeAlias(name)) |aliased| return aliased;
             return .{ .tag = .any };
         },
         // "a.T" -> module a's alias T, or any when unresolvable (the
         // compiler has no dep IO, so it always lands here; semantic
         // validates qualified names separately and errors first)
         .qualified => |q| {
-            if (ctx.resolveImportAlias(q.module, q.name)) |t| return t;
+            if (scope.resolveImportAlias(q.module, q.name)) |t| return t;
             return .{ .tag = .any };
         },
         // ":nil", ":ok" -> atom
@@ -1162,35 +1123,35 @@ pub fn evalTypeExpr(ctx: CheckCtx, te: *const ast.TypeExpr) !TypeInfo {
         // "int | :nil" -> union(@[{name="", types=@[int]}, {name="", types=@[:nil]}])
         // "number?" -> union_of(named("number"), atom(":nil")) from parseAtom
         .union_of => |variants| {
-            var collected = try std.ArrayList(UnionVariant).initCapacity(ctx.alloc, 4);
-            errdefer collected.deinit(ctx.alloc);
+            var collected = try std.ArrayList(UnionVariant).initCapacity(scope.alloc, 4);
+            errdefer collected.deinit(scope.alloc);
             for (variants) |v| {
-                const inner = try evalTypeExpr(ctx, v);
-                try collectVariants(ctx.alloc, inner, &collected);
+                const inner = try evalTypeExpr(scope, v);
+                try collectVariants(scope.alloc, inner, &collected);
             }
-            return .{ .tag = .{ .@"union" = try collected.toOwnedSlice(ctx.alloc) } };
+            return .{ .tag = .{ .@"union" = try collected.toOwnedSlice(scope.alloc) } };
         },
         // "fn(int) -> bool" -> function(param_types=@[int], return_type=bool)
         .function => |f| {
-            var param_types = try std.ArrayList(TypeInfo).initCapacity(ctx.alloc, f.params.len);
-            errdefer param_types.deinit(ctx.alloc);
+            var param_types = try std.ArrayList(TypeInfo).initCapacity(scope.alloc, f.params.len);
+            errdefer param_types.deinit(scope.alloc);
             for (f.params) |p| {
-                try param_types.append(ctx.alloc, if (p.type_name) |tn| try evalTypeExpr(ctx, tn) else .{ .tag = .any });
+                try param_types.append(scope.alloc, if (p.type_name) |tn| try evalTypeExpr(scope, tn) else .{ .tag = .any });
             }
 
-            var param_names = try std.ArrayList([]const u8).initCapacity(ctx.alloc, f.params.len);
-            errdefer param_names.deinit(ctx.alloc);
-            for (f.params) |p| try param_names.append(ctx.alloc, p.name);
-            const return_type = if (f.return_type) |rt| try evalTypeExpr(ctx, rt) else TypeInfo{ .tag = .any };
+            var param_names = try std.ArrayList([]const u8).initCapacity(scope.alloc, f.params.len);
+            errdefer param_names.deinit(scope.alloc);
+            for (f.params) |p| try param_names.append(scope.alloc, p.name);
+            const return_type = if (f.return_type) |rt| try evalTypeExpr(scope, rt) else TypeInfo{ .tag = .any };
 
             var required: usize = 0;
             for (f.params) |p| {
                 if (!p.optional) required += 1;
             }
 
-            const sig = try newSignature(ctx.alloc, .{
-                .param_names = try param_names.toOwnedSlice(ctx.alloc),
-                .params = try param_types.toOwnedSlice(ctx.alloc),
+            const sig = try newSignature(scope.alloc, .{
+                .param_names = try param_names.toOwnedSlice(scope.alloc),
+                .params = try param_types.toOwnedSlice(scope.alloc),
                 .return_type = return_type,
                 .required_count = required,
             });
@@ -1199,20 +1160,20 @@ pub fn evalTypeExpr(ctx: CheckCtx, te: *const ast.TypeExpr) !TypeInfo {
         },
         // "table<int>" -> table(key=null, value=int), "table<string, int>" -> table(key=string, value=int)
         .parameterized => |p| {
-            var params = try std.ArrayList(TypeInfo).initCapacity(ctx.alloc, p.params.len);
-            errdefer params.deinit(ctx.alloc);
-            for (p.params) |param| try params.append(ctx.alloc, try evalTypeExpr(ctx, param));
-            const resolved = try params.toOwnedSlice(ctx.alloc);
+            var params = try std.ArrayList(TypeInfo).initCapacity(scope.alloc, p.params.len);
+            errdefer params.deinit(scope.alloc);
+            for (p.params) |param| try params.append(scope.alloc, try evalTypeExpr(scope, param));
+            const resolved = try params.toOwnedSlice(scope.alloc);
             if (std.mem.eql(u8, p.name, "table")) {
                 if (resolved.len == 1) {
-                    const v = try ctx.alloc.create(TypeInfo);
+                    const v = try scope.alloc.create(TypeInfo);
                     v.* = resolved[0];
                     return .{ .tag = .{ .table = .{ .key = null, .value = v } } };
                 }
                 if (resolved.len == 2) {
-                    const k = try ctx.alloc.create(TypeInfo);
+                    const k = try scope.alloc.create(TypeInfo);
                     k.* = resolved[0];
-                    const v = try ctx.alloc.create(TypeInfo);
+                    const v = try scope.alloc.create(TypeInfo);
                     v.* = resolved[1];
                     return .{ .tag = .{ .table = .{ .key = k, .value = v } } };
                 }
@@ -1222,25 +1183,25 @@ pub fn evalTypeExpr(ctx: CheckCtx, te: *const ast.TypeExpr) !TypeInfo {
         // "{ name: string, age: num }" -> table with per-field types;
         // names borrow source text like .named does, owners clone
         .record => |fields| {
-            const owned = try ctx.alloc.alloc(RecordField, fields.len);
+            const owned = try scope.alloc.alloc(RecordField, fields.len);
             for (fields, owned) |f, *dst| dst.* = .{
                 .name = f.name,
-                .field_type = try evalTypeExpr(ctx, f.type_expr),
+                .field_type = try evalTypeExpr(scope, f.type_expr),
                 .optional = f.optional,
             };
-            const value = try ctx.alloc.create(TypeInfo);
+            const value = try scope.alloc.create(TypeInfo);
             value.* = .{ .tag = .any };
             return makeTable(null, value, owned);
         },
         // "!int" -> union(@[{name="", types=@[{:ok, int}]}, {name="", types=@[{:err, any}]}])
         // the same shape the literal `{:ok, int} | {:err, any}` produces
         .error_union => |inner| {
-            const t = try evalTypeExpr(ctx, inner);
-            var collected = try std.ArrayList(UnionVariant).initCapacity(ctx.alloc, 2);
-            errdefer collected.deinit(ctx.alloc);
-            try collectVariants(ctx.alloc, try makeResultTable(ctx, ":ok", t), &collected);
-            try collectVariants(ctx.alloc, try makeResultTable(ctx, ":err", .{ .tag = .any }), &collected);
-            return .{ .tag = .{ .@"union" = try collected.toOwnedSlice(ctx.alloc) } };
+            const t = try evalTypeExpr(scope, inner);
+            var collected = try std.ArrayList(UnionVariant).initCapacity(scope.alloc, 2);
+            errdefer collected.deinit(scope.alloc);
+            try collectVariants(scope.alloc, try makeResultTable(scope.alloc, ":ok", t), &collected);
+            try collectVariants(scope.alloc, try makeResultTable(scope.alloc, ":err", .{ .tag = .any }), &collected);
+            return .{ .tag = .{ .@"union" = try collected.toOwnedSlice(scope.alloc) } };
         },
     }
 }
@@ -1249,7 +1210,7 @@ pub fn evalTypeExpr(ctx: CheckCtx, te: *const ast.TypeExpr) !TypeInfo {
 /// guardless arm coverage for match exhaustiveness
 /// , one cover per matcher, guards never count since a guard can fail
 ///
-fn patternCover(ctx: CheckCtx, node: *const ast.Node) MatchCover {
+fn patternCover(scope: AliasScope, node: *const ast.Node) MatchCover {
     return switch (node.expr) {
         .ident => .wildcard,
         .atom => |name| .{ .atom = name },
@@ -1258,14 +1219,14 @@ fn patternCover(ctx: CheckCtx, node: *const ast.Node) MatchCover {
         .string, .multiline_string => .string,
 
         .ascribed => |a| if (a.expr.expr == .ident)
-            .{ .ascribed = evalTypeExpr(ctx, a.type_name) catch TypeInfo{ .tag = .any } }
+            .{ .ascribed = evalTypeExpr(scope, a.type_name) catch TypeInfo{ .tag = .any } }
         else
-            patternCover(ctx, a.expr),
+            patternCover(scope, a.expr),
 
         .table_pattern => |items| blk: {
-            const elems = ctx.alloc.alloc(MatchCover, items.len) catch break :blk .other;
+            const elems = scope.alloc.alloc(MatchCover, items.len) catch break :blk .other;
 
-            for (items, elems) |item, *dst| dst.* = patternCover(ctx, item);
+            for (items, elems) |item, *dst| dst.* = patternCover(scope, item);
 
             break :blk .{ .table = elems };
         },
@@ -1274,53 +1235,53 @@ fn patternCover(ctx: CheckCtx, node: *const ast.Node) MatchCover {
     };
 }
 
-fn matcherCover(ctx: CheckCtx, m: ast.MatchMatcher) MatchCover {
+fn matcherCover(scope: AliasScope, m: ast.MatchMatcher) MatchCover {
     return switch (m) {
         .wildcard => .wildcard,
-        .expr => |e| patternCover(ctx, e),
+        .expr => |e| patternCover(scope, e),
     };
 }
 
 /// one cover per guardless matcher
 /// , callers decide what guards mean
-pub fn buildArmCovers(ctx: CheckCtx, arm: ast.MatchArm) ![]MatchCover {
-    var covers = std.ArrayList(MatchCover).initCapacity(ctx.alloc, arm.matchers.len) catch return &.{};
-    errdefer covers.deinit(ctx.alloc);
+pub fn buildArmCovers(scope: AliasScope, arm: ast.MatchArm) ![]MatchCover {
+    var covers = std.ArrayList(MatchCover).initCapacity(scope.alloc, arm.matchers.len) catch return &.{};
+    errdefer covers.deinit(scope.alloc);
 
-    for (arm.matchers) |m| try covers.append(ctx.alloc, matcherCover(ctx, m));
-    return covers.toOwnedSlice(ctx.alloc);
+    for (arm.matchers) |m| try covers.append(scope.alloc, matcherCover(scope, m));
+    return covers.toOwnedSlice(scope.alloc);
 }
 
-pub fn buildCovers(ctx: CheckCtx, arms: []const ast.MatchArm) ![]MatchCover {
-    var covers = std.ArrayList(MatchCover).initCapacity(ctx.alloc, arms.len) catch return &.{};
-    errdefer covers.deinit(ctx.alloc);
+pub fn buildCovers(scope: AliasScope, arms: []const ast.MatchArm) ![]MatchCover {
+    var covers = std.ArrayList(MatchCover).initCapacity(scope.alloc, arms.len) catch return &.{};
+    errdefer covers.deinit(scope.alloc);
 
     for (arms) |arm| {
         if (arm.guard != null) continue;
 
-        const one = try buildArmCovers(ctx, arm);
-        defer ctx.alloc.free(one);
+        const one = try buildArmCovers(scope, arm);
+        defer scope.alloc.free(one);
 
-        try covers.appendSlice(ctx.alloc, one);
+        try covers.appendSlice(scope.alloc, one);
     }
 
-    return covers.toOwnedSlice(ctx.alloc);
+    return covers.toOwnedSlice(scope.alloc);
 }
 
-pub fn matchCovers(ctx: CheckCtx, subject: TypeInfo, arms: []const ast.MatchArm) bool {
-    const covers = buildCovers(ctx, arms) catch return false;
-    defer ctx.alloc.free(covers);
+pub fn matchCovers(scope: AliasScope, subject: TypeInfo, arms: []const ast.MatchArm) bool {
+    const covers = buildCovers(scope, arms) catch return false;
+    defer scope.alloc.free(covers);
 
     return matchCoversAll(subject, covers);
 }
 
 /// one `{:tag, payload}` table, the same shape `{...}` literals infer:
 /// positional fields, tag atom in "0", payload in "1"
-fn makeResultTable(ctx: CheckCtx, tag: []const u8, payload: TypeInfo) !TypeInfo {
-    const fields = try ctx.alloc.alloc(RecordField, 2);
+fn makeResultTable(alloc: std.mem.Allocator, tag: []const u8, payload: TypeInfo) !TypeInfo {
+    const fields = try alloc.alloc(RecordField, 2);
     fields[0] = .{ .name = "0", .field_type = .{ .tag = .{ .atom = tag } } };
     fields[1] = .{ .name = "1", .field_type = payload };
-    const value = try ctx.alloc.create(TypeInfo);
+    const value = try alloc.create(TypeInfo);
     value.* = .{ .tag = .any };
     return makeTable(null, value, fields);
 }
@@ -1433,7 +1394,7 @@ pub fn substCallReturn(
 ) TypeInfo {
     var explicit = std.ArrayList(TypeInfo).initCapacity(ctx.alloc, type_args.len) catch return .{ .tag = .any };
     defer explicit.deinit(ctx.alloc);
-    for (type_args) |ta| explicit.append(ctx.alloc, resolveTypeName(ctx, ta)) catch return .{ .tag = .any };
+    for (type_args) |ta| explicit.append(ctx.alloc, resolveTypeName(ctx.scope, ta)) catch return .{ .tag = .any };
     const eff = effectiveArgs(ctx.alloc, sig.params.len, callee, args, implicit_self) catch return .{ .tag = .any };
     var arg_types = std.ArrayList(TypeInfo).initCapacity(ctx.alloc, eff.len) catch return .{ .tag = .any };
     defer arg_types.deinit(ctx.alloc);
@@ -1857,7 +1818,7 @@ pub fn suggestArmPattern(alloc: std.mem.Allocator, subject: TypeInfo, tag: []con
                 if (v.types.len == 0) return null;
 
                 if (v.types[0].tag == .atom) {
-                    return try alloc.print( ":{s}", .{tag});
+                    return try alloc.print(":{s}", .{tag});
                 }
 
                 if (v.types[0].tag == .table) {
@@ -1867,7 +1828,7 @@ pub fn suggestArmPattern(alloc: std.mem.Allocator, subject: TypeInfo, tag: []con
 
                     // positional only, named shapes fall back to `_`
                     if (fields.len != alen) return null;
-                    if (alen == 1) return try alloc.print( "{{:{s}}}", .{tag});
+                    if (alen == 1) return try alloc.print("{{:{s}}}", .{tag});
 
                     var buf = try std.ArrayList(u8).initCapacity(alloc, 8 + alen * 3);
                     errdefer buf.deinit(alloc);
@@ -1887,8 +1848,8 @@ pub fn suggestArmPattern(alloc: std.mem.Allocator, subject: TypeInfo, tag: []con
             return null;
         },
 
-        .bool => return try alloc.print( ":{s}", .{tag}),
-        .atom => return try alloc.print( ":{s}", .{tag}),
+        .bool => return try alloc.print(":{s}", .{tag}),
+        .atom => return try alloc.print(":{s}", .{tag}),
 
         else => return null,
     }

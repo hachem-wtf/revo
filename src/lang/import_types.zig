@@ -31,10 +31,10 @@ pub fn moduleInterface(alloc: std.mem.Allocator, items: []const *ast.Node) !Modu
     var mctx = ModuleCtx{
         .alloc = alloc,
         .raws = std.StringHashMap(*ast.TypeExpr).init(alloc),
-        .stack = try std.ArrayList([]const u8).initCapacity(alloc, 4),
+        .resolved = std.StringHashMap(types.Alias).init(alloc),
     };
     defer mctx.raws.deinit();
-    defer mctx.stack.deinit(alloc);
+    defer mctx.resolved.deinit();
     // pre-collect every alias raw (pub or not) so forward references
     // and private bases resolve; only pub names are exported below
     // keyed by bare name so dotted aliases (`uri.Hi`) resolve as `Hi`
@@ -46,6 +46,35 @@ pub fn moduleInterface(alloc: std.mem.Allocator, items: []const *ast.Node) !Modu
             try mctx.raws.put(ast.bareName(d.inner.expr.type_alias), d.inner.expr.type_alias.type_expr);
         }
     }
+    // resolve in file order, repeating until stable
+    // later aliases see earlier ones, so the longest dep chain fits in count+1 passes and
+    // cycles settle on whatever completed instead of recursing forever
+    var round: usize = 0;
+    var stable = false;
+
+    while (!stable and round <= mctx.raws.count()) : (round += 1) {
+        stable = true;
+
+        for (items) |item| {
+            if (item.expr != .decl) continue;
+            const d = item.expr.decl;
+            if (d.inner.expr != .type_alias) continue;
+
+            const name = ast.bareName(d.inner.expr.type_alias);
+            const ti = mctx.resolveOne(name) orelse continue;
+
+            if (mctx.resolved.get(name)) |old| {
+                if (!types.eqlExact(old.info, ti)) {
+                    try mctx.resolved.put(name, .{ .info = ti });
+                    stable = false;
+                }
+            } else {
+                try mctx.resolved.put(name, .{ .info = ti });
+                stable = false;
+            }
+        }
+    }
+
     var out = try std.ArrayList(types.RecordField).initCapacity(alloc, items.len);
     errdefer out.deinit(alloc);
     for (items) |item| try moduleExportInto(&mctx, item, &out);
@@ -60,8 +89,8 @@ pub fn moduleInterface(alloc: std.mem.Allocator, items: []const *ast.Node) !Modu
         const t = d.inner.expr.type_alias;
         const name = ast.bareName(t);
 
-        if (mctx.resolveTypeAlias(name)) |ti| {
-            try aliases.append(alloc, .{ .name = name, .info = ti });
+        if (mctx.resolved.get(name)) |a| {
+            try aliases.append(alloc, .{ .name = name, .info = a.info });
         }
     }
     if (out.items.len == 0) {
@@ -86,30 +115,26 @@ pub fn moduleInterface(alloc: std.mem.Allocator, items: []const *ast.Node) !Modu
 const ModuleCtx = struct {
     alloc: std.mem.Allocator,
     raws: std.StringHashMap(*ast.TypeExpr),
-    stack: std.ArrayList([]const u8),
+    resolved: std.StringHashMap(types.Alias),
     type_params: []const []const u8 = &.{},
 
+    pub fn aliasScope(self: *ModuleCtx) types.AliasScope {
+        return .{
+            .alloc = self.alloc,
+            .type_params = self.type_params,
+            .aliases = &self.resolved,
+        };
+    }
+
     pub fn check(self: *ModuleCtx) types.CheckCtx {
-        return types.CheckCtx.init(self, self.alloc);
+        var ctx = types.CheckCtx.init(self, self.alloc);
+        ctx.scope = self.aliasScope();
+        return ctx;
     }
 
-    pub fn isTypeParam(self: *const ModuleCtx, name: []const u8) bool {
-        for (self.type_params) |tp| if (std.mem.eql(u8, tp, name)) return true;
-        return false;
-    }
-
-    pub fn resolveTypeAlias(self: *ModuleCtx, name: []const u8) ?TypeInfo {
+    fn resolveOne(self: *ModuleCtx, name: []const u8) ?TypeInfo {
         const raw = self.raws.get(name) orelse return null;
-        for (self.stack.items) |s| if (std.mem.eql(u8, s, name)) return null;
-        self.stack.append(self.alloc, name) catch return null;
-        defer _ = self.stack.pop();
-        return types.evalTypeExpr(self.check(), raw) catch null;
-    }
-
-    /// qualified refs inside deps (dep on dep types) stay unresolved
-    /// resolving them would recurse into subdep interfaces
-    pub fn resolveImportAlias(_: *ModuleCtx, _: []const u8, _: []const u8) ?TypeInfo {
-        return null;
+        return types.evalTypeExpr(self.aliasScope(), raw) catch null;
     }
 
     pub fn inferIdentType(_: *ModuleCtx, _: []const u8) TypeInfo {
@@ -164,7 +189,7 @@ fn moduleExportInto(mctx: *ModuleCtx, node: *const ast.Node, out: *std.ArrayList
             if (d.kind == .declare_decl and d.inner.expr == .type_alias) {
                 if (!d.pub_) return;
                 const t = d.inner.expr.type_alias;
-                const ft = types.evalTypeExpr(mctx.check(), t.type_expr) catch TypeInfo{ .tag = .any };
+                const ft = types.evalTypeExpr(mctx.aliasScope(), t.type_expr) catch TypeInfo{ .tag = .any };
                 try out.append(alloc, .{ .name = t.name, .field_type = ft });
                 return;
             }
@@ -175,7 +200,7 @@ fn moduleExportInto(mctx: *ModuleCtx, node: *const ast.Node, out: *std.ArrayList
                     // ascription wins over inference, as in analyzeBinding
                     const inferred = types.inferExprType(mctx.check(), b.value);
                     const field_type = if (b.type_name) |tn|
-                        types.evalTypeExpr(mctx.check(), tn) catch inferred
+                        types.evalTypeExpr(mctx.aliasScope(), tn) catch inferred
                     else
                         inferred;
                     try out.append(alloc, .{
@@ -234,7 +259,7 @@ fn tailBindingType(mctx: *ModuleCtx, items: []const *ast.Node) ?TypeInfo {
             const b = item.expr.decl.inner.expr.binding;
             if (b.target.expr == .ident and std.mem.eql(u8, b.target.expr.ident, name)) {
                 if (b.type_name) |tn| {
-                    return types.evalTypeExpr(mctx.check(), tn) catch null;
+                    return types.evalTypeExpr(mctx.aliasScope(), tn) catch null;
                 }
                 return null;
             }

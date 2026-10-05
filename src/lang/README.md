@@ -54,11 +54,11 @@ nothing inside `lang/` imports `root.zig`
 
 zig does allow it and its fine, its just cleaner this way
 
-type code takes `types.CheckCtx`, never `anytype`
+type inference takes `types.CheckCtx`, eval takes `types.AliasScope`
 
-the four scopes (`Compiler`, `SemanticChecker`, `ModuleCtx`, `BareCtx`)
+the three scopes (`Compiler`, `SemanticChecker`, `ModuleCtx`)
 each have a one-line `check()`;\
-    add an interface method and all four fail to build until they implement it
+    add an interface method and all three fail to build until they implement it
 
 ## how to add things
 
