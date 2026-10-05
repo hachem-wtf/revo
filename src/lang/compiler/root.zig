@@ -1717,10 +1717,7 @@ pub const Compiler = struct {
         if (loop_sym != null) self.in_loop_depth += 1;
         defer self.in_loop_depth = prev_in_loop;
 
-        var required_count: u8 = @intCast(params.len);
-        for (params) |p| {
-            if (p.optional or p.default_value != null) required_count -= 1;
-        }
+        const required_count: u8 = @intCast(types.requiredCount(params));
         self.active_registers = params.len;
         self.max_registers = params.len;
         self.upvalue_cache.clearRetainingCapacity();

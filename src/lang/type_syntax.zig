@@ -310,10 +310,7 @@ pub fn printType(ti: TypeInfo, writer: *std.Io.Writer, opts: PrintOptions) !void
                 for (fields, 0..) |f, i| {
                     if (i > 0) try writer.writeAll(", ");
                     // numeric names are positional array entries
-                    const positional = f.name.len > 0 and blk: {
-                        for (f.name) |c| if (!std.ascii.isDigit(c)) break :blk false;
-                        break :blk true;
-                    };
+                    const positional = ast.isPositionalName(f.name);
                     if (!positional) {
                         if (f.optional) try writer.writeByte('?');
                         try writer.writeAll(f.name);
