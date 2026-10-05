@@ -39,12 +39,59 @@ pub const ExpandReport = struct {
     error_report: ?diagnostic.Report = null,
 };
 
-const ProcFailure = struct {
+pub const ProcFailure = struct {
     proc_name: []const u8,
     stage: []const u8,
     span: ?Span,
     message: []const u8,
 };
+
+pub const ProcRun = struct {
+    vm: revo.VM,
+    result: Value,
+};
+
+/// injectable compile-time proc runner
+/// , default compiles+runs the call in a child VM (runDefaultProc)
+/// , a future const-evaluator or test stub replaces it without touching the walker
+/// , decode still reads the child VM tables, so the run owns its VM until decoded
+pub const ProcEvaluator = struct {
+    ptr: ?*anyopaque = null,
+    runFn: *const fn (
+        ptr: ?*anyopaque,
+        parent_vm: *revo.VM,
+        root: *Node,
+        proc_name: []const u8,
+        alloc: std.mem.Allocator,
+        error_info: *?ProcFailure,
+    ) ExpandError!ProcRun,
+
+    pub fn run(
+        self: ProcEvaluator,
+        parent_vm: *revo.VM,
+        root: *Node,
+        proc_name: []const u8,
+        alloc: std.mem.Allocator,
+        error_info: *?ProcFailure,
+    ) ExpandError!ProcRun {
+        return self.runFn(self.ptr, parent_vm, root, proc_name, alloc, error_info);
+    }
+
+    pub fn default() ProcEvaluator {
+        return .{ .ptr = null, .runFn = runDefaultProcFn };
+    }
+};
+
+fn runDefaultProcFn(
+    _: ?*anyopaque,
+    parent_vm: *revo.VM,
+    root: *Node,
+    proc_name: []const u8,
+    alloc: std.mem.Allocator,
+    error_info: *?ProcFailure,
+) ExpandError!ProcRun {
+    return runDefaultProc(parent_vm, root, proc_name, alloc, error_info);
+}
 
 fn buildReport(
     allocator: std.mem.Allocator,
@@ -72,10 +119,22 @@ pub fn expandExprWithSource(
     source_name: []const u8,
     source: []const u8,
 ) !ExpandReport {
+    return expandExprWithSourceWithEvaluator(vm, allocator, expr, source_name, source, null);
+}
+
+pub fn expandExprWithSourceWithEvaluator(
+    vm: *revo.VM,
+    allocator: std.mem.Allocator,
+    expr: *Node,
+    source_name: []const u8,
+    source: []const u8,
+    evaluator: ?ProcEvaluator,
+) !ExpandReport {
     var env = ProcEnv.init(allocator);
     defer env.deinit();
     env.source_name = source_name;
     env.source = source;
+    env.evaluator = evaluator;
     const node = expandInEnv(vm, allocator, expr, &env, .expand) catch |err| {
         if (env.error_info) |info| {
             return .{ .root = null, .error_report = try buildReport(allocator, source_name, source, info) };
@@ -98,6 +157,7 @@ const ProcEnv = struct {
     source_name: []const u8 = "",
     source: []const u8 = "",
     error_info: ?ProcFailure = null,
+    evaluator: ?ProcEvaluator = null,
 
     fn init(allocator: std.mem.Allocator) ProcEnv {
         return .{
@@ -119,6 +179,7 @@ const ProcEnv = struct {
         try cloned.active.appendSlice(self.allocator, self.active.items);
         cloned.source_name = self.source_name;
         cloned.source = self.source;
+        cloned.evaluator = self.evaluator;
         return cloned;
     }
 
@@ -329,7 +390,7 @@ fn evalProcMacro(
     const wrapper_fn = try fnNode(allocator, span, &.{def.param}, def.body);
     const call = try callNodeWithSelf(allocator, span, wrapper_fn, &.{iter_call}, false);
 
-    var run = try runCompileTimeProc(vm, call, def.name, env);
+    var run = try (env.evaluator orelse ProcEvaluator.default()).run(vm, call, def.name, allocator, &env.error_info);
     defer run.vm.deinit();
     const decoded = try decodeProcResult(&run.vm, allocator, span, run.result);
     return expandInEnv(vm, allocator, decoded, env, .expand);
@@ -352,12 +413,17 @@ fn makeRuntimeProcCall(
     );
 }
 
-const ProcRun = struct {
-    vm: revo.VM,
-    result: Value,
-};
-
 fn runCompileTimeProc(parent_vm: *revo.VM, root: *Node, proc_name: []const u8, env: *ProcEnv) ExpandError!ProcRun {
+    return runDefaultProc(parent_vm, root, proc_name, env.allocator, &env.error_info);
+}
+
+fn runDefaultProc(
+    parent_vm: *revo.VM,
+    root: *Node,
+    proc_name: []const u8,
+    alloc: std.mem.Allocator,
+    error_info: *?ProcFailure,
+) ExpandError!ProcRun {
     var vm = revo.VM.init(parent_vm.runtime) catch return error.ProcCompileFailed;
     errdefer vm.deinit();
 
@@ -371,11 +437,11 @@ fn runCompileTimeProc(parent_vm: *revo.VM, root: *Node, proc_name: []const u8, e
     const bytecode = switch (bytecode_report) {
         .ok => |ok| ok,
         .err => |failure| {
-            env.error_info = .{
+            error_info.* = .{
                 .proc_name = proc_name,
                 .stage = "compile",
                 .span = root.span,
-                .message = try env.allocator.dupe(u8, diagnostic.firstError(failure.report).?),
+                .message = try alloc.dupe(u8, diagnostic.firstError(failure.report).?),
             };
             return error.ProcCompileFailed;
         },
@@ -387,11 +453,11 @@ fn runCompileTimeProc(parent_vm: *revo.VM, root: *Node, proc_name: []const u8, e
     switch (result) {
         .ok => {},
         .err => |failure| {
-            env.error_info = .{
+            error_info.* = .{
                 .proc_name = proc_name,
                 .stage = "runtime",
                 .span = root.span,
-                .message = try env.allocator.dupe(u8, diagnostic.firstError(failure.report).?),
+                .message = try alloc.dupe(u8, diagnostic.firstError(failure.report).?),
             };
             return error.ProcEvalFailed;
         },
@@ -400,7 +466,7 @@ fn runCompileTimeProc(parent_vm: *revo.VM, root: *Node, proc_name: []const u8, e
 }
 
 fn reportProcExpandError(env: *ProcEnv, proc_name: []const u8, span: Span, err: ExpandError) void {
-    // ct/rt failures already stored in env by runCompileTimeProc
+    // ct/rt failures already stored in env by the evaluator (default: runDefaultProc)
     if (err == error.ProcCompileFailed or err == error.ProcEvalFailed) return;
 
     const message = switch (err) {
@@ -1211,4 +1277,54 @@ test "recursive proc macro is rejected for now" {
         \\ loop!()
         ,
     }, .{}));
+}
+
+const stub_state = struct {
+    var calls: usize = 0;
+};
+
+fn stubProcRun(
+    ptr: ?*anyopaque,
+    parent_vm: *revo.VM,
+    root: *Node,
+    proc_name: []const u8,
+    alloc: std.mem.Allocator,
+    error_info: *?ProcFailure,
+) ExpandError!ProcRun {
+    _ = ptr;
+    _ = parent_vm;
+    _ = root;
+    _ = alloc;
+    stub_state.calls += 1;
+    error_info.* = .{
+        .proc_name = proc_name,
+        .stage = "runtime",
+        .span = null,
+        .message = "stub evaluator",
+    };
+    return error.ProcEvalFailed;
+}
+
+test "injected proc evaluator replaces the child VM run" {
+    var vm = try revo.VM.init(testing.runtime());
+    defer vm.deinit();
+    try register(&vm);
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const Parser = @import("Parser.zig");
+    const root = try Parser.parseSource(alloc,
+        \\ proc stubbed!(iter) do
+        \\   {{:number, 1}}
+        \\ end
+        \\ stubbed!()
+    , .{});
+
+    stub_state.calls = 0;
+    const ev = ProcEvaluator{ .ptr = null, .runFn = stubProcRun };
+    const report = try expandExprWithSourceWithEvaluator(&vm, alloc, root, "<test>", "", ev);
+    try std.testing.expectEqual(@as(usize, 1), stub_state.calls);
+    try std.testing.expect(report.error_report != null);
 }
