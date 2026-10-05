@@ -21,18 +21,21 @@ and `import_scan` (compile-time import extraction)
 - `ast.zig`: ast defs, tree walking, and printing
 - `Lexer.zig`: tokenizer
 - `Parser.zig`: `parseSource`, `parseSourceReport`, token to tree
-- `macro_pattern.zig`: template macros; `macro_proc.zig` is `proc!` macros;
-  `macro_common.zig` holds their shared dispatch bits
+- `macro_proc.zig`: `proc!` macros + `ProcEvaluator` trait (child-VM run is the default impl);
+  `macro_common.zig` holds qualified-name/call rebuild bits
+- `scope_graph.zig`: `ScopeId`/`DefId` graph + `transparent` kinds, populated alongside legacy scopes
 - `semantic.zig`: name and type checking, owns `Failure`
 - `compiler/`: compiling to bytecode; `types.zig` is where all the types are at
   plus `evalTypeExpr` and the `CheckCtx` interface every scope implements
-- `ir/`: `IrInst` plus the optimization passes, `opt.zig` runs em all
+- `ir/`: `IrInst` (`tmp_index` for dce) plus the optimization passes, `opt.zig` runs em all
+  (`optimize` fuses fold→dce→peephole, same order)
 - `type_syntax.zig`: text-only type serialization/deserialiization
 - `import_types.zig`: public type surface of a module
 - `diagnostic.zig`: reports: parts, spans, severities, render
 - `pipeline/`: build orchestration stuff
 - `Workspace.zig` + `workspace/`: incremental IDE state (hover, completions, symbols, diagnostics);
-  the repl, lsp, and cli all build through it
+  the repl, lsp, and cli all build through it. `workspace/query.zig` tracks
+  content hashes + revision (salsa-style inputs, taking over from version+opts)
 - `Project.zig`:
   `lib.json` / `exe.json` detection
   (only for now, later itll actually manage build & lsp features and such)
@@ -60,7 +63,7 @@ each have a one-line `check()`;\
 ## how to add things
 
 new syntax: `Lexer.zig` (tokens) -> `Parser.zig` (tree) -> `ast.zig`
-    (node kinds) -> `macro_pattern.zig` if it desugars, `compiler/` if it compiles
+    (node kinds) -> `macro_proc.zig` if it expands, `compiler/` if it compiles
 
 new builtin: `../baselib/base.rv` table plus zig impl (see `../baselib/`)
     docs and runtime stay in sync that way

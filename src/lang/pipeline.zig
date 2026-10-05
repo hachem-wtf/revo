@@ -59,8 +59,8 @@ pub fn buildWithWarnings(vm: *VM, source: Source, opts: BuildOptions, warnings: 
         .ok => |ok| ok,
         .err => |failure| {
             var diag = failure;
-            if (source.name) |name| diag.report.source_name = name;
             diag.report = try diag.report.copy(vm.runtime.diag_alloc);
+            if (source.name) |name| diag.report.source_name = try vm.runtime.diag_alloc.dupe(u8, name);
             return .{ .err = .{ .parse = diag } };
         },
     };
@@ -93,8 +93,8 @@ pub fn buildWithWarnings(vm: *VM, source: Source, opts: BuildOptions, warnings: 
         .ok => |ok| ok,
         .proc_err, .macro_err => |report| {
             var copied = try report.copy(vm.runtime.diag_alloc);
-            copied.source_name = source.name;
-            copied.source = source.text;
+            if (source.name) |name| copied.source_name = try vm.runtime.diag_alloc.dupe(u8, name);
+            copied.source = try vm.runtime.diag_alloc.dupe(u8, source.text);
             return .{ .err = .{ .expand = .{ .report = copied } } };
         },
     };
