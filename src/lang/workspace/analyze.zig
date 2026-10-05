@@ -605,6 +605,35 @@ test "workspace invalidates dependent caches" {
     try std.testing.expect(ws.cache.get(c) == null);
 }
 
+test "identical text change keeps caches" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    var vm = try revo.VM.init(.{ .alloc = alloc, .io = std.testing.io, .diag_alloc = alloc });
+    defer vm.deinit();
+
+    var ws = try Workspace.initWithVm(&vm, alloc);
+    defer ws.deinit();
+
+    const id = try ws.open("<test>", "1 + 1", .{});
+    var first = try ws.analyzeDetailed(alloc, id, .{});
+    defer first.deinit(alloc);
+    try std.testing.expect(!first.cached);
+
+    const e1 = try ws.ensureInspect(alloc, id, .{});
+
+    try ws.change(id, "1 + 1");
+    try std.testing.expectEqual(@as(u32, 1), ws.snapshot(id).?.version);
+
+    const e2 = try ws.ensureInspect(alloc, id, .{});
+    try std.testing.expect(e1 == e2);
+
+    var second = try ws.analyzeDetailed(alloc, id, .{});
+    defer second.deinit(alloc);
+    try std.testing.expect(second.cached);
+}
+
 test "analysis returns snapshot and bytecode" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();

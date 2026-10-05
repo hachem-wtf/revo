@@ -62,6 +62,8 @@ pub fn open(self: *Workspace, name: []const u8, text: []const u8, opts: OpenOpti
 
 /// replace file text; invalidates caches
 pub fn change(self: *Workspace, id: FileId, text: []const u8) !void {
+    // same text changes nothing, version and caches survive
+    if (!self.query_db.isDirty(id, text)) return;
     const entry = try entryPtr(self, id);
     const text_copy = try self.alloc.dupe(u8, text);
     errdefer self.alloc.free(text_copy);
