@@ -782,6 +782,19 @@ const SemanticChecker = struct {
         return .{ .tag = .{ .function = sig } };
     }
 
+    fn pushGraphScope(self: *SemanticChecker, kind: scope_graph.ScopeKind) !void {
+        if (self.graph) |g| {
+            const no_span = ast.Span{ .start = 0, .end = 0, .line = 0, .column = 0 };
+            self.graph_scope = try g.childScope(self.graph_scope, kind, no_span);
+        }
+    }
+
+    fn popGraphScope(self: *SemanticChecker) void {
+        if (self.graph) |g| {
+            self.graph_scope = g.scopes.items[self.graph_scope].parent orelse self.graph_scope;
+        }
+    }
+
     fn analyzeNode(self: *SemanticChecker, node: *const ast.Node) anyerror!types_mod.TypeInfo {
         const t: types_mod.TypeInfo = switch (node.expr) {
             .binding => |b| try self.analyzeBinding(b, null, node.span),
@@ -789,8 +802,9 @@ const SemanticChecker = struct {
             .type_alias => |alias| try self.analyzeTypeAlias(alias, null, node.span),
             .fn_expr => |fn_expr| try self.analyzeFnExpr(fn_expr, node.span),
             .block => |exprs| blk: {
-                // synthetic blocks (e.g. from multi-import) don't create a scope
                 if (node.synthetic_block) {
+                    try self.pushGraphScope(.transparent);
+                    defer self.popGraphScope();
                     var last: types_mod.TypeInfo = .{ .tag = .any };
                     for (exprs) |expr| {
                         last = try self.analyzeNode(expr);

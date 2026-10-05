@@ -19,6 +19,11 @@ pub const ScopeKind = enum {
     file,
     func,
     block,
+    transparent,
+
+    pub fn isTransparent(self: ScopeKind) bool {
+        return self == .transparent;
+    }
 };
 
 /// what a name denotes, kept coarse
@@ -133,6 +138,7 @@ pub const ScopeGraph = struct {
 
     /// record one binding
     /// , same scope twice replaces silently, like the old maps
+    /// , transparent scopes declare into their nearest non-transparent ancestor
     /// , callers decide what counts, this only records
     pub fn declare(
         self: *ScopeGraph,
@@ -142,21 +148,34 @@ pub const ScopeGraph = struct {
         span: ast.Span,
         doc: ?[]const u8,
     ) !DefId {
+        const target = self.effectiveScope(scope);
         const key = try self.strings.intern(name);
         const id: DefId = @intCast(self.defs.items.len);
-        try self.defs.append(self.alloc, .{ .name = key, .kind = kind, .scope = scope, .span = span, .doc = doc });
+        try self.defs.append(self.alloc, .{ .name = key, .kind = kind, .scope = target, .span = span, .doc = doc });
         errdefer _ = self.defs.pop();
-        try self.scopes.items[scope].members.put(key, id);
+        try self.scopes.items[target].members.put(key, id);
         return id;
     }
 
+    /// nearest non-transparent ancestor including self, file root never transparent
+    pub fn effectiveScope(self: *const ScopeGraph, scope: ScopeId) ScopeId {
+        var current: ScopeId = scope;
+        while (self.scopes.items[current].kind.isTransparent()) {
+            current = self.scopes.items[current].parent orelse return scope;
+        }
+        return current;
+    }
+
     /// innermost-out lookup, first hit wins
+    /// , transparent scopes hold no members by construction, skipped defensively
     pub fn resolve(self: *const ScopeGraph, scope: ScopeId, name: []const u8) ?DefId {
         const key = self.strings.lookup(name) orelse return null;
         var current: ?ScopeId = scope;
         while (current) |id| {
             const s = self.scopes.items[id];
-            if (s.members.get(key)) |def| return def;
+            if (!s.kind.isTransparent()) {
+                if (s.members.get(key)) |def| return def;
+            }
             current = s.parent;
         }
         return null;
