@@ -258,7 +258,6 @@ const SemanticChecker = struct {
             .graph_scope = 0,
         };
 
-        // legacy scope plus the graph root underneath, builtins land in both
         try checker.scopes.append(checker.alloc, Scope.init(checker.alloc));
         if (graph) |g| {
             checker.graph_scope = try g.fileRoot(source_name, ast.Span{ .start = 0, .end = 0, .line = 0, .column = 0 });

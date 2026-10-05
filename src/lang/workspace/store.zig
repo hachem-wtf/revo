@@ -55,6 +55,8 @@ pub fn open(self: *Workspace, name: []const u8, text: []const u8, opts: OpenOpti
     errdefer _ = self.file_names.remove(name_copy);
 
     self.symbol_index_dirty = true;
+    // query inputs track by content hash; todo legacy caches still serve reads
+    try self.query_db.track(id, text_copy);
     return id;
 }
 
@@ -66,6 +68,8 @@ pub fn change(self: *Workspace, id: FileId, text: []const u8) !void {
     self.alloc.free(entry.text);
     entry.text = text_copy;
     entry.version += 1;
+    _ = self.query_db.bump();
+    try self.query_db.track(id, text_copy);
     self.invalidateCache(id);
     self.symbol_index_dirty = true;
 }
@@ -74,6 +78,7 @@ pub fn change(self: *Workspace, id: FileId, text: []const u8) !void {
 pub fn close(self: *Workspace, id: FileId) void {
     const index = self.file_index.get(id) orelse return;
     const removed = self.files.swapRemove(index);
+    self.query_db.evict(id);
     self.invalidateCache(id);
     self.removeDeps(id);
     if (self.reverse_deps.fetchRemove(id)) |kv| {
@@ -120,6 +125,7 @@ pub fn entryPtr(self: *Workspace, id: FileId) !*FileEntry {
 pub fn clearFiles(self: *Workspace) void {
     while (self.files.items.len != 0) {
         const entry = self.files.pop() orelse unreachable;
+        self.query_db.evict(entry.id);
         self.alloc.free(entry.name);
         self.alloc.free(entry.text);
         if (entry.project_root.len > 0) self.alloc.free(entry.project_root);

@@ -12,6 +12,7 @@
 //!   imports (import graph edges), deps (dependents + invalidation),
 //!   symbols (document/workspace symbols + index), definition (go to),
 //!   hover, signature, completion, inlay (per-position queries)
+//!   query (salsa-style input hashes + revision guard, taking over)
 
 pub const Workspace = @This();
 alloc: std.mem.Allocator,
@@ -23,6 +24,7 @@ dependencies: std.AutoHashMap(FileId, []FileId),
 reverse_deps: std.AutoHashMap(FileId, []FileId),
 cache: std.AutoHashMap(FileId, CacheEntry), // full build cache
 inspect_cache: std.AutoHashMap(FileId, InspectCacheEntry), // quick inspect cache
+query_db: query_mod.QueryDb, // input hashes + revision, todo legacy caches still serve reads
 symbol_index: std.StringHashMap([]IndexedSymbol),
 symbol_index_dirty: bool = true,
 next_file_id: FileId = 1,
@@ -196,6 +198,7 @@ pub fn init(alloc: std.mem.Allocator) !Workspace {
         .reverse_deps = std.AutoHashMap(FileId, []FileId).init(alloc),
         .cache = std.AutoHashMap(FileId, CacheEntry).init(alloc),
         .inspect_cache = std.AutoHashMap(FileId, InspectCacheEntry).init(alloc),
+        .query_db = query_mod.QueryDb.init(alloc),
         .symbol_index = std.StringHashMap([]IndexedSymbol).init(alloc),
     };
 }
@@ -212,6 +215,7 @@ pub fn attachVm(self: *Workspace, vm: *VM) void {
 
 pub fn deinit(self: *Workspace) void {
     store.clearFiles(self);
+    self.query_db.deinit();
     self.clearCache();
     deps_mod.clearDeps(self);
     self.files.deinit(self.alloc);
@@ -460,6 +464,7 @@ const hover_mod = @import("workspace/hover.zig");
 const imports = @import("workspace/imports.zig");
 const inlay = @import("workspace/inlay.zig");
 const pipeline = @import("pipeline.zig");
+const query_mod = @import("workspace/query.zig");
 const signature = @import("workspace/signature.zig");
 const store = @import("workspace/store.zig");
 const symbols_mod = @import("workspace/symbols.zig");
@@ -472,3 +477,5 @@ pub const Position = txt.Position;
 pub const Range = txt.Range;
 pub const Location = txt.Location;
 pub const buildASTSpanMap = txt.buildASTSpanMap;
+pub const QueryDb = query_mod.QueryDb;
+pub const hashText = query_mod.hashText;
