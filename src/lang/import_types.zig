@@ -145,7 +145,6 @@ const ModuleCtx = struct {
         const sig = types.buildFnSig(
             self.alloc,
             self,
-            evalCtxThunk,
             params,
             return_type,
             combined,
@@ -154,10 +153,6 @@ const ModuleCtx = struct {
         ) catch return .{ .tag = .any };
 
         return .{ .tag = .{ .function = sig } };
-    }
-
-    fn evalCtxThunk(self: *ModuleCtx, te: *const ast.TypeExpr) !TypeInfo {
-        return try types.evalTypeExpr(self.check(), te);
     }
 };
 

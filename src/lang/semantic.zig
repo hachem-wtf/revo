@@ -724,17 +724,14 @@ const SemanticChecker = struct {
         return sig;
     }
 
-    fn evalCheckedThunk(self: *SemanticChecker, te: *const ast.TypeExpr) !types_mod.TypeInfo {
-        return try self.evalCheckedTypeExpr(te);
-    }
-
     fn makeFnSig(self: *SemanticChecker, fn_expr: anytype) !*FnSig {
         const doc: ?[]const u8 = if (@hasField(@TypeOf(fn_expr), "doc")) fn_expr.doc else null;
+        for (fn_expr.params) |p| if (p.type_name) |t| try self.checkQualifiedTypes(t);
+        if (fn_expr.return_type) |rt| try self.checkQualifiedTypes(rt);
 
         return try types_mod.buildFnSig(
             self.alloc,
             self,
-            evalCheckedThunk,
             fn_expr.params,
             fn_expr.return_type,
             fn_expr.type_params,

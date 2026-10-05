@@ -381,17 +381,12 @@ pub fn allocFnSig(
     return try types.buildFnSig(
         self.alloc,
         self,
-        evalCtxThunk,
         params,
         return_type,
         type_params,
         null,
         .{ .degrade_param = true, .want_defaults = true },
     );
-}
-
-fn evalCtxThunk(self: *Compiler, te: *const ast.TypeExpr) !types.TypeInfo {
-    return try types.evalTypeExpr(self.check(), te);
 }
 
 pub fn declareFnSignature(

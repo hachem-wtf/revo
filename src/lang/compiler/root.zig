@@ -271,7 +271,6 @@ pub const Compiler = struct {
         const sig = types.buildFnSig(
             self.alloc,
             self,
-            evalCtxThunk,
             params,
             return_type,
             type_params,
@@ -280,10 +279,6 @@ pub const Compiler = struct {
         ) catch return .{ .tag = .any };
 
         return .{ .tag = .{ .function = sig } };
-    }
-
-    fn evalCtxThunk(self: *Compiler, te: *const ast.TypeExpr) !types.TypeInfo {
-        return try types.evalTypeExpr(self.check(), te);
     }
 
     pub fn resolveTypeAlias(self: *Compiler, name: []const u8) ?types.TypeInfo {

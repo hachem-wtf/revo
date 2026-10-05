@@ -225,6 +225,11 @@ pub fn requiredCount(params: []const ast.FnParam) usize {
     return n;
 }
 
+/// shared eval for scopes needing no validation
+fn evalInScope(ctx: anytype, te: *const ast.TypeExpr) !TypeInfo {
+    return evalTypeExpr(ctx.check(), te);
+}
+
 /// buildFnSig flags, both off for semantic strict mode
 pub const SigOpt = struct {
     degrade_param: bool = false,
@@ -232,14 +237,12 @@ pub const SigOpt = struct {
 };
 
 /// one fn-sig builder for all four inference sites
-///   eval resolves each annotation, comptime generic so error sets stay narrow
 ///   degrade turns per-param failures to any, strict propagates
 ///   want_defaults fills default_values like locals does
 ///   scoping save/restore stays at call sites, only loop + sig live here
 pub fn buildFnSig(
     alloc: std.mem.Allocator,
     ctx: anytype,
-    eval: anytype,
     params: []const ast.FnParam,
     return_type: ?*ast.TypeExpr,
     type_params: []const []const u8,
@@ -255,7 +258,7 @@ pub fn buildFnSig(
     for (params) |p| {
         try param_names.append(alloc, p.name);
 
-        const t = if (p.type_name) |tn| eval(ctx, tn) catch |e| blk: {
+        const t = if (p.type_name) |tn| evalInScope(ctx, tn) catch |e| blk: {
             if (opt.degrade_param) break :blk TypeInfo{ .tag = .any };
 
             return e;
@@ -274,7 +277,7 @@ pub fn buildFnSig(
     return newSignature(alloc, .{
         .param_names = try param_names.toOwnedSlice(alloc),
         .params = try param_types.toOwnedSlice(alloc),
-        .return_type = if (return_type) |rt| eval(ctx, rt) catch |e| blk: {
+        .return_type = if (return_type) |rt| evalInScope(ctx, rt) catch |e| blk: {
             if (opt.degrade_param) break :blk TypeInfo{ .tag = .any };
 
             return e;
