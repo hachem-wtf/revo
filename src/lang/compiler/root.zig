@@ -123,8 +123,6 @@ pub const Compiler = struct {
     upvalue_cache: std.AutoHashMap(usize, usize),
     type_aliases: std.StringHashMap(types.Alias),
     annotations: ?types.Annotations = null,
-    /// annotatedType misses during this build, temporary totality probe
-    annotation_misses: usize = 0,
     pending_templates: std.ArrayList(revo.TemplateID),
     declared_globals: std.StringHashMap(void),
     current_template: revo.TemplateID = 0,
@@ -179,7 +177,7 @@ pub const Compiler = struct {
         self.value_stack.deinit(self.alloc);
     }
 
-    // the CheckCtx scope for types.zig inference and eval
+    // the CheckCtx scope for types.zig inference
     //   has annotations so nested inference reads the table, not live scope
     pub fn check(self: *Compiler) types.CheckCtx {
         var ctx = types.CheckCtx.init(self, self.alloc);
@@ -198,20 +196,20 @@ pub const Compiler = struct {
     }
 
     pub fn inferExprType(self: *Compiler, node: *const Node) types.TypeInfo {
-        if (self.annotations) |ann| {
-            if (ann.map.get(node)) |id| return ann.table.get(id);
-        }
+        if (self.lookupAnnotation(node)) |ti| return ti;
         return types.inferExprType(self.check(), node);
     }
 
     /// pipeline lowering reads this, never live inference
     ///   miss means lowering-synthesized or never-analyzed: safe any fallback
     pub fn annotatedType(self: *Compiler, node: *const Node) types.TypeInfo {
-        if (self.annotations) |ann| {
-            if (ann.map.get(node)) |id| return ann.table.get(id);
-            self.annotation_misses += 1;
-        }
-        return .{ .tag = .any };
+        return self.lookupAnnotation(node) orelse .{ .tag = .any };
+    }
+
+    fn lookupAnnotation(self: *Compiler, node: *const Node) ?types.TypeInfo {
+        const ann = self.annotations orelse return null;
+        const id = ann.map.get(node) orelse return null;
+        return ann.table.get(id);
     }
 
     pub fn inferIdentType(self: *Compiler, name: []const u8) types.TypeInfo {

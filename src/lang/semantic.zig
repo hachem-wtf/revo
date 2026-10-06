@@ -499,7 +499,7 @@ const SemanticChecker = struct {
         return null;
     }
 
-    // the CheckCtx scope for types.zig inference and eval
+    // the CheckCtx scope for types.zig inference
     pub fn check(self: *SemanticChecker) types_mod.CheckCtx {
         var ctx = types_mod.CheckCtx.init(self, self.alloc);
         ctx.scope = self.aliasScope();

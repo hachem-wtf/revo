@@ -344,7 +344,7 @@ pub fn stderr() std.Io.File {
 }
 
 test {
-    _ = @import("./lang/lang_tests.zig");
+    // lang suite runs split under test-lang instead, one binary per area
     _ = @import("./extension.zig");
     _ = @import("./baselib/ffi.zig");
     _ = @import("./baselib/host.zig");

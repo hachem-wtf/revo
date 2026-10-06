@@ -465,6 +465,36 @@ pub fn build(b: *Build) !void {
 
             test_step.dependOn(&b.addRunArtifact(c_test).step);
             test_step.dependOn(&b.addRunArtifact(header_test).step);
+
+            const test_lang_step = b.step("test-lang", "run the split lang suite");
+            test_step.dependOn(test_lang_step);
+            {
+                const areas = [_][]const u8{
+                    "parse",       "tables",       "arithmetic",     "fibers",
+                    "bindings",    "strings",      "closures_loops", "reports",
+                    "imports",     "match",        "scope",          "functions",
+                    "pipe_params", "modules",      "typed",          "match_types",
+                    "generics",    "declare_repl",
+                };
+                for (areas) |area| {
+                    const mod = b.createModule(.{
+                        .root_source_file = b.path(b.fmt("src/lang/tests/{s}.zig", .{area})),
+                        .target = target,
+                        .optimize = effective_optimize,
+                        .link_libc = !is_freestanding,
+                    });
+                    mod.addImport("revo", revo_mod);
+                    if (test_ffi_lib) |ffi| mod.linkLibrary(ffi);
+                    const t = b.addTest(.{ .root_module = mod, .filters = test_filters });
+                    const run = b.addRunArtifact(t);
+                    const area_step = b.step(
+                        b.fmt("test-lang-{s}", .{area}),
+                        b.fmt("run lang {s} tests", .{area}),
+                    );
+                    area_step.dependOn(&run.step);
+                    test_lang_step.dependOn(&run.step);
+                }
+            }
         }
 
         //

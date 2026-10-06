@@ -40,7 +40,8 @@ and `import_scan` (compile-time import extraction)
   `lib.json` / `exe.json` detection
   (only for now, later itll actually manage build & lsp features and such)
 - `docgen.zig`: doc extraction and rendering
-- `test_helpers.zig`: test helpers; `lang_tests.zig`: the language suite;
+- `test_helpers.zig`: test helpers; `tests/`: the language suite, one file
+  per area (`zig build test-lang` runs it, one binary per file);
   `ir/tests.zig`: the optimizer suite
 - `root.zig`: facade for outsiders, re-exports only
 
@@ -80,4 +81,4 @@ syntax while implementations stay in focused files
 ## tests
 
 unit tests go inline next to the code
-end-to-end coverage lives in `lang_tests.zig` via the `test_helpers.zig` helpers
+end-to-end coverage lives in `tests/` via the `test_helpers.zig` helpers

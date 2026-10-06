@@ -40,7 +40,7 @@ pub fn inlayHints(
         // fn declarations get `-> ret` after the params; aliases fall
         // through to the generic `: type` hint below
         if (ti.tag == .function) {
-            const decl_needle = try alloc.print( "fn {s}(", .{sym.name});
+            const decl_needle = try alloc.print("fn {s}(", .{sym.name});
             defer alloc.free(decl_needle);
             if (std.mem.find(u8, line, decl_needle) != null) {
                 if (std.mem.find(u8, line, "->") != null or ti.tag.function.return_type.tag == .any) continue;
@@ -53,7 +53,7 @@ pub fn inlayHints(
 
                 try hints.append(alloc, .{
                     .position = .{ .line = sym.range.start.line, .character = paren + 1 },
-                    .label = try alloc.print( " -> {s}", .{ret}),
+                    .label = try alloc.print(" -> {s}", .{ret}),
                     .kind = .type,
                 });
                 continue;
@@ -62,13 +62,13 @@ pub fn inlayHints(
 
         const tn = try type_syntax.formatTypeOpts(alloc, ti, .{});
         defer alloc.free(tn);
-        const needle = try alloc.print( ": {s}", .{tn});
+        const needle = try alloc.print(": {s}", .{tn});
         defer alloc.free(needle);
         if (std.mem.find(u8, line, needle) != null) continue;
 
         try hints.append(alloc, .{
             .position = sym.range.end,
-            .label = try alloc.print( ": {s}", .{tn}),
+            .label = try alloc.print(": {s}", .{tn}),
             .kind = .type,
         });
     }
@@ -89,6 +89,7 @@ const ParamHintVisitor = struct {
         switch (node.expr) {
             .call => |c| if (c.callee.expr == .ident and !c.implicit_self and c.args.len > 0) {
                 const names = self.paramNames(c.callee.expr.ident);
+                defer self.alloc.free(names);
                 for (c.args, 0..) |arg, i| {
                     if (i >= names.len) break;
                     self.hints.append(self.alloc, .{
@@ -107,15 +108,27 @@ const ParamHintVisitor = struct {
         if (self.ws.inspect_cache.getPtr(self.id)) |cache| {
             if (cache.sig_map.get(name)) |sig| {
                 var out = std.ArrayList([]const u8).empty;
-                for (sig.params) |p| out.append(self.alloc, p.name) catch return &.{};
-                return out.toOwnedSlice(self.alloc) catch &.{};
+                for (sig.params) |p| out.append(self.alloc, p.name) catch {
+                    out.deinit(self.alloc);
+                    return &.{};
+                };
+                return out.toOwnedSlice(self.alloc) catch {
+                    out.deinit(self.alloc);
+                    return &.{};
+                };
             }
         }
 
         if (common.baselibSig(name)) |spec| {
             var out = std.ArrayList([]const u8).empty;
-            for (spec.type.kind.function.params) |p| out.append(self.alloc, p.name) catch return &.{};
-            return out.toOwnedSlice(self.alloc) catch &.{};
+            for (spec.type.kind.function.params) |p| out.append(self.alloc, p.name) catch {
+                out.deinit(self.alloc);
+                return &.{};
+            };
+            return out.toOwnedSlice(self.alloc) catch {
+                out.deinit(self.alloc);
+                return &.{};
+            };
         }
         return &.{};
     }
@@ -128,7 +141,9 @@ fn appendParamHints(
     id: FileId,
     text: []const u8,
 ) !void {
-    const parsed = Parser.parseSourceReport(alloc, text, .{}) catch return;
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    defer arena.deinit();
+    const parsed = Parser.parseSourceReport(arena.allocator(), text, .{}) catch return;
     const root = switch (parsed) {
         .ok => |r| r,
         .err => return,

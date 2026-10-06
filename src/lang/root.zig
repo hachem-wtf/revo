@@ -1,6 +1,5 @@
 pub const ast = @import("ast.zig");
 pub const diagnostic = @import("diagnostic.zig");
-pub const lang_tests = @import("lang_tests.zig");
 pub const Lexer = @import("Lexer.zig");
 pub const macro_proc = @import("macro_proc.zig");
 pub const Parser = @import("Parser.zig");
@@ -81,7 +80,6 @@ test {
     _ = @import("Parser.zig");
     _ = @import("type_syntax.zig");
     _ = @import("test_helpers.zig");
-    _ = @import("lang_tests.zig");
     _ = @import("semantic.zig");
     _ = @import("pipeline.zig");
     _ = @import("std").testing.refAllDecls(@import("Workspace.zig"));

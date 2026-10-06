@@ -35,8 +35,7 @@ fn normalizeLoopResult(self: *Compiler) !void {
 }
 
 pub fn compileLoop(self: *Compiler, body: *const Node, label: ?[]const u8) !void {
-    const LoopScopeT = locals.LoopScope(@TypeOf(self.*));
-    var loop = try LoopScopeT.init(self, label);
+    var loop = try locals.LoopScope.init(self, label);
     defer loop.deinit();
 
     const loop_start: ProgramCounter = @intCast(self.irLen());
@@ -54,8 +53,7 @@ pub fn compileWhile(
     body: *const Node,
     label: ?[]const u8,
 ) !void {
-    const LoopScopeT = locals.LoopScope(@TypeOf(self.*));
-    var loop = try LoopScopeT.init(self, label);
+    var loop = try locals.LoopScope.init(self, label);
     defer loop.deinit();
 
     const loop_start: ProgramCounter = @intCast(self.irLen());
@@ -81,8 +79,7 @@ pub fn compileForRange(
     end_expr: *const Node,
     label: ?[]const u8,
 ) !void {
-    const LoopScopeT = locals.LoopScope(@TypeOf(self.*));
-    var loop = try LoopScopeT.init(self, label);
+    var loop = try locals.LoopScope.init(self, label);
     defer loop.deinit();
 
     try self.compile(start_expr, true); // contiguous triple for range_init
@@ -226,8 +223,7 @@ pub fn compileFor(
         return compileForRange(self, params, body, range_info.start, range_info.step, range_info.end, label);
     }
 
-    const LoopScopeT = locals.LoopScope(@TypeOf(self.*));
-    var loop = try LoopScopeT.init(self, label);
+    var loop = try locals.LoopScope.init(self, label);
     defer loop.deinit();
 
     // wrap expression with to_iter
@@ -1266,8 +1262,7 @@ pub fn compileContinue(self: *Compiler, expr: *const Node, value: ?*const Node, 
 }
 
 pub fn compileLabeledBlock(self: *Compiler, label: []const u8, body: *const Node) !void {
-    const LoopScopeT = locals.LoopScope(@TypeOf(self.*));
-    var loop = try LoopScopeT.init(self, label);
+    var loop = try locals.LoopScope.init(self, label);
     defer loop.deinit();
 
     self.loop_stack.items[self.loop_stack.items.len - 1].continue_target = self.irLen();
