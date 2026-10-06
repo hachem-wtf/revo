@@ -31,9 +31,11 @@ const EXAMPLES =
     \\  revo -e "1 + 2"                   run inline code
     \\  revo -e "1 + 2" -i                run inline code and enter REPL
     \\  revo bench script.rv              run with timing stats
+    \\
 ++ (if (revo.vm.perf.enabled)
     \\  revo --perf script.rv             run with VM perf counters (needs -Dperf)
     \\  revo bench --perf script.rv       bench with VM perf counters (needs -Dperf)
+    \\
 else
     "") ++
     \\  revo dis script.rv                show bytecode disassembly
