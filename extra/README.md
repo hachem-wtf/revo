@@ -6,3 +6,4 @@ extra tools, configs, plugins, etc. that you might want for revo
 - [nix flake](./nix)
 - [js wasm bindings & porting instructions](./wasm)
 - [emacs plugin](./Emacs.org)
+- [vim plugin](./revo.vim)

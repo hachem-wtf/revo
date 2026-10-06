@@ -125,6 +125,14 @@ then open the logs via
 :lua vim.cmd('tabnew ' .. vim.lsp.log.get_filename())
 ```
 
+## just vim
+
+there is a plain vim plugin available, 
+
+it's in the repo's `extra/` directory, named [revo.vim](https://github.com/if-not-nil/revo/blob/main/extra/revo.vim)
+
+made by cheri
+
 ## helix
 
 you have to do it manually for highlighting to work
@@ -166,6 +174,15 @@ hx --grammar build
 
 make sure `revo` is in your path, then open any `.rv` file
 you can verify everything loaded with `:health` while a revo file is open
+
+## zed
+
+the [zed-revo](https://github.com/w0x7y/revo-zed-extension) extension has `.rv`/`.revo` file recognition
+, syntax highlighting via the tree-sitter, and lsp integration thru `revo lsp`
+
+the extension's readme covers the configuration
+
+made by w0x7y
 
 ## emacs
 
