@@ -886,6 +886,7 @@ pub const Compiler = struct {
                             .@"const" => .@"const",
                             .let => .let,
                             .global => .global,
+                            .global_const => .global_const,
                             else => .@"const",
                         };
                         return try self.compileBinding(b.*, kind);
@@ -1561,7 +1562,7 @@ pub const Compiler = struct {
         binding: Binding,
         kind: BindingKind,
     ) InternalCompileError!void {
-        if (binding.target.expr == .ident and kind != .global) {
+        if (binding.target.expr == .ident and kind != .global and kind != .global_const) {
             return bindings.compileLocalBinding(
                 self,
                 binding.target.expr.ident,
@@ -1595,7 +1596,7 @@ pub const Compiler = struct {
             try self.regDupe();
             try self.declared_globals.put(name, {});
             try self.emit(
-                if (kind != .@"const") .store_user_global else .store_user_global_const,
+                if (kind == .global_const or kind == .@"const") .store_user_global_const else .store_user_global,
                 try self.vm.internAtom(name),
             );
             return;
@@ -1611,7 +1612,7 @@ pub const Compiler = struct {
                 ),
                 else => {},
             }
-            if (kind == .global) {
+            if (kind == .global or kind == .global_const) {
                 try bindings.declareGlobalPattern(self, binding.target);
             } else {
                 try bindings.declarePatternLocals(

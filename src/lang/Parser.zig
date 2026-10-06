@@ -731,7 +731,7 @@ fn parseFnWithBodyMin(self: *Parser, start: Token, body_min_bp: u8) anyerror!*No
             });
             return self.allocExpr(
                 Span.merge(start.span(), body.span),
-                .{ .decl = .{ .inner = bind_node, .kind = if (self.bindingScope()) .global else .@"const" } },
+                .{ .decl = .{ .inner = bind_node, .kind = if (self.bindingScope()) .global_const else .@"const" } },
             );
         }
         return error.UnexpectedToken;
@@ -845,7 +845,10 @@ fn parseTypeExpr(self: *Parser) anyerror!*ast.TypeExpr {
 
 /// const x = expr or let x = expr, with const {a, b} = <expr> destructuring
 fn parseBinding(self: *Parser, comptime kind_in: ast.DeclKind, start: Token) anyerror!*Node {
-    const kind: ast.DeclKind = if (self.bindingScope()) .global else kind_in;
+    const kind: ast.DeclKind = if (self.bindingScope())
+        (if (kind_in == .@"const") .global_const else .global)
+    else
+        kind_in;
 
     const mutable = (kind == .global or kind == .let);
 

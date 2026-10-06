@@ -261,7 +261,7 @@ pub fn predeclare(self: *Compiler, exprs: []const *Node) !void {
             },
             .binding => |binding| {
                 if (binding.target.expr != .ident or binding.value.expr != .fn_expr) continue;
-                if (decl.kind == .global) continue; // globals are not locals
+                if (decl.kind == .global or decl.kind == .global_const) continue; // globals are not locals
                 const name = binding.target.expr.ident;
                 if (ast.isDiscardName(name)) continue;
                 _ = try reuseOrDeclareLocal(self, name, decl.kind == .let);

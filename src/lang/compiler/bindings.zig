@@ -14,7 +14,7 @@ const locals = @import("locals.zig");
 const toRegister = locals.toRegister;
 const types_mod = @import("types.zig");
 
-pub const BindingKind = enum { global, let, @"const" };
+pub const BindingKind = enum { global, global_const, let, @"const" };
 
 pub fn compileLocalBinding(
     self: *Compiler,
@@ -84,7 +84,7 @@ pub fn bindDeclaredPattern(
     switch (pattern.expr) {
         .ident => |name| {
             if (ast.isDiscardName(name)) return;
-            const slot = try locals.reuseOrDeclareLocal(self, name, kind != .@"const");
+            const slot = try locals.reuseOrDeclareLocal(self, name, kind != .@"const" and kind != .global_const);
             locals.markLocalInitialized(self, slot);
             try self.emitBind(.bind_local, slot, try toRegister(source_idx));
             _ = try self.pop();
@@ -173,12 +173,12 @@ pub fn bindPattern(
             try self.spans.append(self.alloc, self.active_span);
             _ = try self.record(.move, &.{.{ .reg = try toRegister(source_idx) }}, true, mv_dst, 0);
             try self.emit(
-                if (kind == .@"const") .store_user_global_const else .store_user_global,
+                if (kind == .@"const" or kind == .global_const) .store_user_global_const else .store_user_global,
                 try self.vm.internAtom(name),
             );
         },
         .table_pattern => |items| {
-            const is_mutable = kind != .@"const";
+            const is_mutable = kind != .@"const" and kind != .global_const;
             for (items, 0..) |item, idx| {
                 switch (item.expr) {
                     .ident => |name| {

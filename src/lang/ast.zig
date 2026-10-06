@@ -317,6 +317,9 @@ pub const DeclKind = enum {
     @"const",
     let,
     global,
+    /// repl top-level `const`
+    /// TODO: add actual "global const" syntax
+    global_const,
     test_decl,
     suite_decl,
     type_alias_decl,

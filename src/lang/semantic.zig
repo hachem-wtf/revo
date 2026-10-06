@@ -330,7 +330,7 @@ const SemanticChecker = struct {
                 else => continue,
             };
 
-            if (decl.kind == .global) continue; // duh
+            if (decl.kind == .global or decl.kind == .global_const) continue; // duh
             switch (decl.inner.expr) {
                 .binding => |b| {
                     if (b.target.expr != .ident or b.value.expr != .fn_expr) continue;
