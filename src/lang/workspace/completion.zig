@@ -45,7 +45,7 @@ fn callSignature(
 
     if (param_names.len == 0) return .{
         .detail = detail,
-        .insert_text = try arena.print( "{s}()", .{name}),
+        .insert_text = try arena.print("{s}()", .{name}),
     };
 
     var sbuf = std.Io.Writer.Allocating.init(arena);

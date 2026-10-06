@@ -141,4 +141,3 @@ test "match ascriptions narrow to the annotated type" {
     }
     try std.testing.expect(saw_add_imm);
 }
-

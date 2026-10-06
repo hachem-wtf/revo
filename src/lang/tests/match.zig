@@ -1,12 +1,8 @@
-const std = @import("std");
-const alloc = std.testing.allocator;
 
 const revo = @import("revo");
 const lang = revo.lang;
-const VM = revo.VM;
 
 const t = revo.lang.test_helpers;
-
 
 //
 // match
@@ -200,4 +196,3 @@ test "ascriptions in value position are rejected" {
         "type ascriptions only go in match patterns",
     );
 }
-

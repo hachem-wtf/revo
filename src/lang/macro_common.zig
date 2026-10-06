@@ -19,7 +19,7 @@ pub fn qualifiedMacroName(alloc: std.mem.Allocator, callee: *const Node) !?[]u8 
     if (f.object.expr != .ident) return null;
     if (!std.mem.endsWith(u8, f.name, "!")) return null;
 
-    return try alloc.print( "{s}.{s}", .{ f.object.expr.ident, f.name });
+    return try alloc.print("{s}.{s}", .{ f.object.expr.ident, f.name });
 }
 
 /// rebuild an unexpanded call after callee + args already expanded

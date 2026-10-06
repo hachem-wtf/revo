@@ -287,7 +287,7 @@ fn dottedMacroName(alloc: std.mem.Allocator, callee: *const Node) !?[]u8 {
     var name = try alloc.dupe(u8, parts[0]);
     errdefer alloc.free(name);
     for (parts[1..part_count]) |part| {
-        const combined = try alloc.print( "{s}.{s}", .{ name, part });
+        const combined = try alloc.print("{s}.{s}", .{ name, part });
         alloc.free(name);
         name = combined;
     }
@@ -404,11 +404,11 @@ fn macroReport(
     errdefer b.deinit();
 
     for (missed) |m| {
-        const msg = try allocator.print( fmt, .{m.name});
+        const msg = try allocator.print(fmt, .{m.name});
         try b.err(msg, m.span);
     }
 
-    const first = try allocator.print( fmt, .{missed[0].name});
+    const first = try allocator.print(fmt, .{missed[0].name});
     errdefer allocator.free(first);
 
     var report = try b.finish(first, .err);

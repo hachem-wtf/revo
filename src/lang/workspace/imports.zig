@@ -50,7 +50,7 @@ fn resolveImportPath(
         std.Io.Dir.path.join(self.alloc, &.{ base_dir, clean }) catch return null;
     const ext = std.Io.Dir.path.extension(joined);
     if (ext.len != 0) return joined;
-    const with_ext = self.alloc.print( "{s}.rv", .{joined}) catch {
+    const with_ext = self.alloc.print("{s}.rv", .{joined}) catch {
         self.alloc.free(joined);
         return null;
     };

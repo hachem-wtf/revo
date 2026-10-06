@@ -156,4 +156,3 @@ test "function return value destructuring" {
         \\ x + y
     , 20);
 }
-

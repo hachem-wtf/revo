@@ -7,7 +7,6 @@ const VM = revo.VM;
 
 const t = revo.lang.test_helpers;
 
-
 test "lang surface exports parse and build pipeline entrypoints" {
     var arena = std.heap.ArenaAllocator.init(alloc);
     defer arena.deinit();
@@ -73,4 +72,3 @@ test "parser reports multiple syntax errors in one pass" {
         else => return error.ExpectedCompileFailure,
     }
 }
-

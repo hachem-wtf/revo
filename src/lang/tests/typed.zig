@@ -79,7 +79,6 @@ test "ascribed pub re-export types the import" {
 // typed compilation through the vm; integration coverage for the
 // type universe, kept with the language suite instead of types.zig
 //
-const types = lang.compiler.types;
 
 //
 // type system
@@ -777,4 +776,3 @@ test "for loop expression produces loop atom" {
         \\ f()
     , 4);
 }
-

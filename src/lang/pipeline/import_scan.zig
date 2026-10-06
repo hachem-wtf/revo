@@ -66,17 +66,6 @@ pub fn preloadImportsWithFs(fs: Fs, root: *Node, alloc: std.mem.Allocator, cache
     }
 }
 
-fn walkAndProcessImports(
-    vm: *VM,
-    node: *Node,
-    alloc: std.mem.Allocator,
-    inject_nodes: *std.ArrayList(*Node),
-    visited: *std.StringHashMap(void),
-    visited_sub: *std.StringHashMap(void),
-    cache: *ImportCache,
-) !void {
-    return walkAndProcessImportsWithFs(Fs.fromVm(vm), node, alloc, inject_nodes, visited, visited_sub, cache);
-}
 
 fn walkAndProcessImportsWithFs(
     fs: Fs,
@@ -173,10 +162,6 @@ pub fn resolveModuleTextWithFs(fs: Fs, cache: *ImportCache, path: []const u8, al
     return source;
 }
 
-/// strict cached read off a resolved path, borrowed from arena
-fn readResolvedCached(vm: *VM, cache: *ImportCache, resolved: []const u8, alloc: std.mem.Allocator) ![]const u8 {
-    return readResolvedCachedWithFs(Fs.fromVm(vm), cache, resolved, alloc);
-}
 
 fn readResolvedCachedWithFs(fs: Fs, cache: *ImportCache, resolved: []const u8, alloc: std.mem.Allocator) ![]const u8 {
     if (cache.lookup(resolved)) |hit| return hit;
@@ -192,21 +177,6 @@ fn readResolvedCachedWithFs(fs: Fs, cache: *ImportCache, resolved: []const u8, a
     return source;
 }
 
-/// read, parse, and extract macros/procs from a module for compile-time use
-/// does NOT compile or cache the module!!! runtime `import` handles that!
-/// extraction populates the expander env with qualified names (mod_name.macro!)
-fn processImport(
-    vm: *VM,
-    path: []const u8,
-    mod_name: []const u8,
-    alloc: std.mem.Allocator,
-    inject_nodes: *std.ArrayList(*Node),
-    visited: *std.StringHashMap(void),
-    visited_sub: *std.StringHashMap(void),
-    cache: *ImportCache,
-) !void {
-    return processImportWithFs(Fs.fromVm(vm), path, mod_name, alloc, inject_nodes, visited, visited_sub, cache);
-}
 
 fn processImportWithFs(
     fs: Fs,
@@ -242,7 +212,7 @@ fn extractPubDefs(node: *Node, prefix: []const u8, alloc: std.mem.Allocator, out
                 switch (d.inner.expr) {
                     .proc_macro => |pm| {
                         if (std.mem.endsWith(u8, pm.name, "!")) {
-                            const qualified = try alloc.print( "{s}.{s}", .{ prefix, ast.bareMacroName(pm.name) });
+                            const qualified = try alloc.print("{s}.{s}", .{ prefix, ast.bareMacroName(pm.name) });
                             const proc_node = try ast.allocNode(alloc, d.inner.span, .{ .proc_macro = .{
                                 .name = qualified,
                                 .param = .{ .name = pm.param.name, .name_span = pm.param.name_span },
@@ -266,19 +236,6 @@ fn extractPubDefs(node: *Node, prefix: []const u8, alloc: std.mem.Allocator, out
     }
 }
 
-/// extract one level of pub imports;;; loads submods and extracts their macros
-/// but does NOT recurse into submod's own pub imports (breaks the inference cycle)
-fn extractPubImportsOneLevel(
-    vm: *VM,
-    node: *Node,
-    prefix: []const u8,
-    alloc: std.mem.Allocator,
-    inject_nodes: *std.ArrayList(*Node),
-    visited_sub: *std.StringHashMap(void),
-    cache: *ImportCache,
-) !void {
-    return extractPubImportsOneLevelWithFs(Fs.fromVm(vm), node, prefix, alloc, inject_nodes, visited_sub, cache);
-}
 
 fn extractPubImportsOneLevelWithFs(
     fs: Fs,
@@ -297,12 +254,12 @@ fn extractPubImportsOneLevelWithFs(
             if (stmt.pub_) {
                 // key by qualified prefix + path so different parents with same sub-path
                 // both get their macros extracted
-                const dedup_key = try alloc.print( "{s}.{s}.{s}", .{ prefix, stmt.name, stmt.path });
+                const dedup_key = try alloc.print("{s}.{s}.{s}", .{ prefix, stmt.name, stmt.path });
                 defer alloc.free(dedup_key);
                 if (visited_sub.contains(dedup_key)) return;
                 try visited_sub.put(dedup_key, {});
 
-                const sub_prefix = try alloc.print( "{s}.{s}", .{ prefix, stmt.name });
+                const sub_prefix = try alloc.print("{s}.{s}", .{ prefix, stmt.name });
                 defer alloc.free(sub_prefix);
 
                 const resolved = try resolveModuleFileWithFs(fs, stmt.path) orelse return;

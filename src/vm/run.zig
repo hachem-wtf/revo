@@ -115,7 +115,7 @@ test "module hot reload cache" {
     const import_dir = try tmp.dir.realPathFileAlloc(std.testing.io, ".", alloc);
     defer alloc.free(import_dir);
 
-    const source_name = try alloc.print( "{s}/script.rv", .{import_dir});
+    const source_name = try alloc.print("{s}/script.rv", .{import_dir});
     defer alloc.free(source_name);
 
     const code =

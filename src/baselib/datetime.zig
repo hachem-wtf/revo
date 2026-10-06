@@ -80,7 +80,7 @@ pub const Impl = struct {
 
         // Format as "HH:MM:SS"
         pub fn toIsoString(self: Time, allocator: std.mem.Allocator) ![]u8 {
-            return allocator.print( "{d:0>2}:{d:0>2}:{d:0>2}", .{ self.hour, self.minute, self.second });
+            return allocator.print("{d:0>2}:{d:0>2}:{d:0>2}", .{ self.hour, self.minute, self.second });
         }
     };
 
@@ -175,7 +175,7 @@ pub const Impl = struct {
 
         // Format as "YYYY-MM-DD"
         pub fn toIsoString(self: Date, allocator: std.mem.Allocator) ![]u8 {
-            return allocator.print( "{d:0>4}-{d:0>2}-{d:0>2}", .{ self.year, self.month, self.day });
+            return allocator.print("{d:0>4}-{d:0>2}-{d:0>2}", .{ self.year, self.month, self.day });
         }
     };
 

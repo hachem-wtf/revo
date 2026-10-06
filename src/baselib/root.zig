@@ -66,7 +66,7 @@ pub const Impl = struct {
     pub fn gensym(vm: *VM) !host.HostResult {
         const n = vm.runtime.gensym_counter;
         vm.runtime.gensym_counter += 1;
-        const name = try vm.runtime.alloc.print( "__gensym_{d}", .{n});
+        const name = try vm.runtime.alloc.print("__gensym_{d}", .{n});
         defer vm.runtime.alloc.free(name);
         return .data(try vm.ownValueStringNoDedup(name));
     }

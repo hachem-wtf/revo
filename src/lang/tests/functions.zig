@@ -1,12 +1,8 @@
-const std = @import("std");
-const alloc = std.testing.allocator;
 
 const revo = @import("revo");
 const lang = revo.lang;
-const VM = revo.VM;
 
 const t = revo.lang.test_helpers;
-
 
 //
 // fn semantics
@@ -234,4 +230,3 @@ test "channel receives from multiple producers preserve ordering" {
         \\ join(a) + join(b) + v1 + v2
     , 303);
 }
-

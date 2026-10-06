@@ -359,7 +359,6 @@ test "annotated function return type propagates to caller via pointer" {
 // generics / type_var tests
 //
 
-
 test "types: type_var equality" {
     const TI = lang.compiler.types.TypeInfo;
     const a = TI{ .tag = .{ .type_var = "T" } };
@@ -615,4 +614,3 @@ test "implicit generics" {
 // baselib signatures flow from the semantic checker through the
 // annotation bridge into the compiler
 //
-

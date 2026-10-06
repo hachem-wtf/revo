@@ -45,7 +45,7 @@ fn compileProgram(inner: *revo.VM, name: []const u8, source: []const u8) ?*Progr
     self.last_error = null;
 
     const result = revo.lang.build(inner, .{ .name = name, .text = source }, .{}) catch |err| {
-        const msg = self.alloc.print( "{}", .{err}) catch return null;
+        const msg = self.alloc.print("{}", .{err}) catch return null;
         defer self.alloc.free(msg);
 
         self.last_error = self.alloc.dupeSentinel(u8, msg, 0) catch null;
@@ -86,14 +86,14 @@ fn runProgram(inner: *revo.VM, program: *Program, out_value: ?*ErevoValue) bool 
     self.last_error = null;
 
     inner.setProgramDebugInfo(program.bytecode.spans, program.source, program.name) catch |err| {
-        const msg = self.alloc.print( "{}", .{err}) catch return false;
+        const msg = self.alloc.print("{}", .{err}) catch return false;
         defer self.alloc.free(msg);
         self.last_error = self.alloc.dupeSentinel(u8, msg, 0) catch null;
         return false;
     };
 
     const result = revo.run.runBytecodeReport(inner, program.name, program.bytecode.instructions) catch |err| {
-        const msg = self.alloc.print( "{}", .{err}) catch return false;
+        const msg = self.alloc.print("{}", .{err}) catch return false;
         defer self.alloc.free(msg);
         self.last_error = self.alloc.dupeSentinel(u8, msg, 0) catch null;
         return false;

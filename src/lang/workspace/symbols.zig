@@ -405,7 +405,7 @@ const SymbolVisitor = struct {
                 if (slice.len == 0 or std.mem.findScalar(u8, slice, '\n') != null) continue;
 
                 out.append(self.alloc, .{
-                    .name = self.alloc.print( "{d}", .{idx}) catch return null,
+                    .name = self.alloc.print("{d}", .{idx}) catch return null,
                     .preview = self.alloc.dupe(u8, slice) catch return null,
                 }) catch return null;
             }

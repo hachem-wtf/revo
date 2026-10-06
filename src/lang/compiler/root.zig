@@ -658,7 +658,7 @@ pub const Compiler = struct {
         const prefix = try std.mem.join(self.alloc, "::", self.test_suite_names.items);
         if (prefix.len == 0) return self.alloc.dupe(u8, test_name);
         defer self.alloc.free(prefix);
-        return self.alloc.print( "{s}::{s}", .{ prefix, test_name });
+        return self.alloc.print("{s}::{s}", .{ prefix, test_name });
     }
 
     pub fn compileValue(self: *Compiler, expr: *const Node) InternalCompileError!void {
@@ -918,13 +918,13 @@ pub const Compiler = struct {
                     "import statement outside function context",
                 );
                 if (state_mod.findLocalInCurrentScope(self, is.name)) |_| {
-                    const msg = try self.alloc.print( "name `{s}` is already defined", .{is.name});
+                    const msg = try self.alloc.print("name `{s}` is already defined", .{is.name});
                     return self.fail(.ParseError, expr, msg);
                 }
                 // also check import_locals to prevent double import of same name
                 for (fn_state.import_locals.items) |il| {
                     if (std.mem.eql(u8, il.name, is.name)) {
-                        const msg = try self.alloc.print( "name `{s}` is already defined by another import", .{is.name});
+                        const msg = try self.alloc.print("name `{s}` is already defined by another import", .{is.name});
                         return self.fail(.ParseError, expr, msg);
                     }
                 }
@@ -1425,7 +1425,7 @@ pub const Compiler = struct {
                         const expected_str = try type_syntax.formatTypeOpts(self.alloc, expected_type, .{});
                         const actual_str = try type_syntax.formatTypeOpts(self.alloc, actual_type, .{});
                         try self.appendFailureReport(.ParseError, &.{
-                            .{ .@"error" = try self.alloc.print( "default for `{s}` wants {s}, got {s}", .{ sig.param_names[idx], expected_str, actual_str }) },
+                            .{ .@"error" = try self.alloc.print("default for `{s}` wants {s}, got {s}", .{ sig.param_names[idx], expected_str, actual_str }) },
                         });
                         had_error = true;
                     },

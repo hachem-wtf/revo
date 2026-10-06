@@ -138,7 +138,7 @@ const SlugSet = struct {
         try self.map.put(alloc, base, n + 1);
         if (n == 0) return base;
 
-        return alloc.print( "{s}-{d}", .{ base, n });
+        return alloc.print("{s}-{d}", .{ base, n });
     }
 };
 

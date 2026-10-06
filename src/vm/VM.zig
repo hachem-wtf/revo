@@ -980,7 +980,7 @@ pub fn setRuntimeMessage(self: *VM, message: []const u8) !void {
 }
 
 pub fn setRuntimeMessageFmt(self: *VM, comptime fmt_str: []const u8, args: anytype) !void {
-    const message = try self.runtime.alloc.print( fmt_str, args);
+    const message = try self.runtime.alloc.print(fmt_str, args);
     self.clearRuntimeMessage();
     self.runtime_message = message;
 }
@@ -1007,7 +1007,7 @@ pub fn typeError(self: *VM, comptime expected: []const u8, got: mem.Value) RunFa
 }
 
 pub fn fail(self: *VM, comptime err: RunError, comptime fmt: []const u8, args: anytype) RunFailure {
-    const msg = self.runtime.alloc.print( fmt, args) catch
+    const msg = self.runtime.alloc.print(fmt, args) catch
         return self.runFailure(err);
     self.setRuntimeMessageOwned(msg);
     return self.runFailure(err);

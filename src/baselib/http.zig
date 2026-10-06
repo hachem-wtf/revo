@@ -221,7 +221,7 @@ fn headerToString(value: Value, vm: *VM) anyerror![]const u8 {
     return switch (value.tag()) {
         .atom => vm.stringValue(value.asAtom().?),
         .string => vm.stringValue(value.asStr().?),
-        .number => try vm.runtime.alloc.print( "{d}", .{value.asNumOpt().?}),
+        .number => try vm.runtime.alloc.print("{d}", .{value.asNumOpt().?}),
         else => error.InvalidHeaderType,
     };
 }

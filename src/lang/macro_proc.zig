@@ -413,9 +413,6 @@ fn makeRuntimeProcCall(
     );
 }
 
-fn runCompileTimeProc(parent_vm: *revo.VM, root: *Node, proc_name: []const u8, env: *ProcEnv) ExpandError!ProcRun {
-    return runDefaultProc(parent_vm, root, proc_name, env.allocator, &env.error_info);
-}
 
 fn runDefaultProc(
     parent_vm: *revo.VM,
@@ -534,7 +531,7 @@ fn encodeExpr(allocator: std.mem.Allocator, node: *const Node, splices: []const 
     // so it compiles as a variable reference instead of an encoded ident node
     if (node.expr == .ident) {
         for (splices, 0..) |splice, i| {
-            const ph = try allocator.print( "__qq_{d}", .{i});
+            const ph = try allocator.print("__qq_{d}", .{i});
             if (std.mem.eql(u8, node.expr.ident, ph)) {
                 return ast.allocNode(allocator, node.span, .{ .ident = splice });
             }

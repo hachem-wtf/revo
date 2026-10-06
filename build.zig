@@ -469,6 +469,7 @@ pub fn build(b: *Build) !void {
             const test_lang_step = b.step("test-lang", "run the split lang suite");
             test_step.dependOn(test_lang_step);
             {
+                // todo dont do this lol
                 const areas = [_][]const u8{
                     "parse",       "tables",       "arithmetic",     "fibers",
                     "bindings",    "strings",      "closures_loops", "reports",

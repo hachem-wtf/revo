@@ -3,7 +3,6 @@ const alloc = std.testing.allocator;
 
 const revo = @import("revo");
 const lang = revo.lang;
-const VM = revo.VM;
 
 const t = revo.lang.test_helpers;
 
@@ -285,10 +284,10 @@ test "import with absolute path" {
         .{ .path = "absm.rv", .data = "pub const x = 42\n" },
     });
     defer m.deinit();
-    const abs_path = try alloc.print( "{s}/absm.rv", .{m.dir});
+    const abs_path = try alloc.print("{s}/absm.rv", .{m.dir});
     defer alloc.free(abs_path);
 
-    const source = try alloc.print( "import '{s}'\nabsm.x", .{abs_path});
+    const source = try alloc.print("import '{s}'\nabsm.x", .{abs_path});
     defer alloc.free(source);
 
     var result = try t.topResult(source, m.dir);
@@ -416,4 +415,3 @@ test "labeled break with unknown label is rejected" {
         \\ end
     , .UnsupportedSyntax);
 }
-
