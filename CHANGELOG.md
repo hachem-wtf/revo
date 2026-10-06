@@ -166,6 +166,13 @@ tuples and structs are gone now, most breaking change yet
   "asdf"[-2] == "d"
   ```
 
+- table slicing
+  ```ruby
+  {41, 42, 43}[..1] == {41, 42}
+  {41, 42, 43}[1..] == {42, 43}
+  {41, 42, 43}[..-1..] == {43, 42, 41}
+  ```
+
 - diagnostics have severity (err, warning, note, help) and slug codes. works for lsp as well
 
 - std:

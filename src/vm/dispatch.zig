@@ -1385,7 +1385,12 @@ noinline fn execSlice(self: *VM, regs: []Value, base: usize, instr: Instruction)
 
     const source_len: isize = switch (object.tag()) {
         .string => @intCast(self.stringValue(object.asString().?).len),
-        else => return self.typeError("string for slice", object),
+        .table => blk: {
+            const t_id = object.asTable().?;
+            const t = try self.tableFast(t_id);
+            break :blk @intCast(t.array.items.len);
+        },
+        else => return self.typeError("string or table for slice", object),
     };
 
     const start_num = if (start_value.asAtom() == nil_atom)
@@ -1401,14 +1406,18 @@ noinline fn execSlice(self: *VM, regs: []Value, base: usize, instr: Instruction)
     if (!std.math.isFinite(start_num) or !std.math.isFinite(step_num) or !std.math.isFinite(end_num) or
         @floor(start_num) != start_num or @floor(step_num) != step_num or @floor(end_num) != end_num or
         step_num == 0)
+    {
         return self.fail(error.TypeError, "slice bounds must be finite integers with a non-zero step", .{});
+    }
+
+    const start: isize = @intFromFloat(start_num);
+    const step: isize = @intFromFloat(step_num);
+    const end: isize = @intFromFloat(end_num);
 
     switch (object.tag()) {
         .string => {
             const source = self.stringValue(object.asString().?);
-            const start: isize = @intFromFloat(start_num);
-            const step: isize = @intFromFloat(step_num);
-            const end: isize = @intFromFloat(end_num);
+
             var out = std.ArrayList(u8).initCapacity(self.runtime.alloc, 8) catch |err| return self.runFailure(err);
             defer out.deinit(self.runtime.alloc);
             var i = start;
@@ -1420,7 +1429,23 @@ noinline fn execSlice(self: *VM, regs: []Value, base: usize, instr: Instruction)
             const data = try self.adoptValueString(try out.toOwnedSlice(self.runtime.alloc));
             regWrite(regs, base, instr.a, data);
         },
-        else => return self.typeError("string for slice", object),
+        .table => {
+            const t_id = object.asTable().?;
+            const src_t = try self.tableFast(t_id);
+            const src = src_t.array.items;
+
+            self.noteGCPressure(@sizeOf(revo.table.Table) + 64);
+            const out_id = try self.tables.create();
+            const out_t = try self.tableFast(out_id);
+            var i = start;
+            while ((step > 0 and i < end) or (step < 0 and i > end)) : (i += step) {
+                if (i < 0 or @as(usize, @intCast(i)) >= src.len)
+                    return self.fail(error.TypeError, "table slice index out of range", .{});
+                try out_t.push(self.runtime.alloc, src[@intCast(i)]);
+            }
+            regWrite(regs, base, instr.a, Value.new.table(out_id));
+        },
+        else => return self.typeError("string or table for slice", object),
     }
     return null;
 }
