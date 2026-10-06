@@ -196,7 +196,7 @@ the fundamental types are:
   only `:false`, `0`, `:undef`, `:missing`, `:no`, `:none`, `:no_result`,  and `:nil` are falsey - everything else (including `""` and `{{}}`) is truthy
 
   for this reason, the language does not have exceptions/errors and uses
-  {:err, :ErrorName} and {:ok, value} together with pattern matching, `?`, `orelse` and `:unwrap()`
+  `{:err, :ErrorName}` and `{:ok, value}` together with pattern matching, `?`, `orelse` and `:unwrap()`
   to handle errors. toplevel `?` panics instead of returning silently:
 
     ```revo

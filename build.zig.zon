@@ -9,6 +9,7 @@
         .lsp_kit = .{
             .url = "git+https://github.com/zigtools/lsp-kit.git#d148676ace1eaecf3c703ce7d350d0e94e502ed7",
             .hash = "lsp_kit-0.1.0-bi_PLwc2DACoR7VTz_qKFXUvtx7veHvWcTQvP9pDFLpk",
+            .lazy = true,
         },
         .isocline = .{
             .url = "git+https://github.com/daanx/isocline#8d6dc1ef95b1b46711e66eb23d39d4467a0fcdac",
@@ -18,6 +19,7 @@
         .mimalloc = .{
             .url = "git+https://github.com/microsoft/mimalloc#a3ca0e5e2eb283c2c9275f30872e30252a91b66c",
             .hash = "N-V-__8AAIqlVAAxtYUqEp5MwpxhasjkxYzBd6sVeYpAYJbU",
+            .lazy = true,
         },
         .zlinter = .{
             .url = "git+https://github.com/kurtwagner/zlinter?ref=0.17.x#1a5e5776b02b23cce0e34d041bda712625ef71e3",
@@ -31,6 +33,7 @@
         .translate_c = .{
             .url = "git+https://codeberg.org/ziglang/translate-c?ref=zig-0.17.x#02ff0c523fb92a38939b04d0145c4a9602a74d56",
             .hash = "translate_c-2.0.0-Q_BUWltOBwBYABF84EUL208pIFeUIwbBs29FmVBaafN5",
+            .lazy = true,
         },
     },
     .paths = .{

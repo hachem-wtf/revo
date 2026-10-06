@@ -1151,6 +1151,7 @@ inline fn switchOrStop(
     base: *usize,
     instr: *Instruction,
 ) !bool {
+    // depth runs unwind to host caller instead of switching fibers
     if (comptime use_depth) return false;
     if (self.sched.switchNext()) {
         fiber.* = self.currentFiber();
