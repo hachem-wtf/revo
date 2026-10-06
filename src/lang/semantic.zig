@@ -1352,6 +1352,14 @@ const SemanticChecker = struct {
                 try self.declare(name, fn_type, doc, .binding);
             }
             _ = try self.analyzeFnBody(binding.value.expr.fn_expr, sig);
+            if (std.mem.endsWith(u8, name, "?") and sig.return_type.tag != .bool) {
+                const msg = try self.alloc.print(
+                    "function ending with ? must return bool, got {s}",
+                    .{try type_syntax.formatTypeOpts(self.alloc, sig.return_type, .{})},
+                );
+                if (self.first_code == null) self.first_code = "predicate-return-type";
+                try self.appendError(msg, binding.target.span, "expected bool");
+            }
             if (self.type_map) |tm| {
                 _ = tm.remove(name);
                 try tm.put(try self.alloc.dupe(u8, name), fn_type);
