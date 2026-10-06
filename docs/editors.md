@@ -131,6 +131,8 @@ there is a plain vim plugin available,
 
 it's in the repo's `extra/` directory, named [revo.vim](https://github.com/if-not-nil/revo/blob/main/extra/revo.vim)
 
+[there is also a standalone repository](https://codeberg.org/cheridoe/revo.vim)
+
 made by cheri
 
 ## helix
