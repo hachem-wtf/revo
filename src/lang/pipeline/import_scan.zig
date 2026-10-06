@@ -66,7 +66,6 @@ pub fn preloadImportsWithFs(fs: Fs, root: *Node, alloc: std.mem.Allocator, cache
     }
 }
 
-
 fn walkAndProcessImportsWithFs(
     fs: Fs,
     node: *Node,
@@ -162,7 +161,6 @@ pub fn resolveModuleTextWithFs(fs: Fs, cache: *ImportCache, path: []const u8, al
     return source;
 }
 
-
 fn readResolvedCachedWithFs(fs: Fs, cache: *ImportCache, resolved: []const u8, alloc: std.mem.Allocator) ![]const u8 {
     if (cache.lookup(resolved)) |hit| return hit;
 
@@ -176,7 +174,6 @@ fn readResolvedCachedWithFs(fs: Fs, cache: *ImportCache, resolved: []const u8, a
 
     return source;
 }
-
 
 fn processImportWithFs(
     fs: Fs,
@@ -235,7 +232,6 @@ fn extractPubDefs(node: *Node, prefix: []const u8, alloc: std.mem.Allocator, out
         else => {},
     }
 }
-
 
 fn extractPubImportsOneLevelWithFs(
     fs: Fs,

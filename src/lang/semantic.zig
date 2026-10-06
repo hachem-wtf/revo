@@ -743,6 +743,18 @@ const SemanticChecker = struct {
         );
     }
 
+    /// true if candidate's return type eventually resolves to target's sig
+    /// , so like adopting it would make one sig reference the other in a loop
+    fn fnReturnCycles(candidate: *const FnSig, target: *const FnSig, depth: usize) bool {
+        if (depth > 64) return true;
+        if (candidate == target) return true;
+
+        return switch (candidate.return_type.tag) {
+            .function => |f| fnReturnCycles(f, target, depth + 1),
+            else => false,
+        };
+    }
+
     fn analyzeFnBody(self: *SemanticChecker, fn_expr: anytype, sig: *FnSig) !types_mod.TypeInfo {
         try self.return_types.append(self.alloc, sig.return_type);
         defer _ = self.return_types.pop();
@@ -772,7 +784,17 @@ const SemanticChecker = struct {
         }
         const body_type = try self.analyzeNode(fn_expr.body);
         if (sig.return_type.tag == .any and body_type.tag != .any) {
-            sig.return_type = body_type;
+            // a fn whose inferred return type is itself
+            // (or cycles back thru other inferred fns)
+            // would make the sig self-referential
+            // and diverge every later clone/intern
+            //
+            // leave its return type open
+            const cycles = switch (body_type.tag) {
+                .function => |f| SemanticChecker.fnReturnCycles(f, sig, 0),
+                else => false,
+            };
+            if (!cycles) sig.return_type = body_type;
         }
         // validate explicit return type against inferred body type
         if (sig.return_type.tag != .any and body_type.tag != .any and !types_mod.canCoerce(body_type, sig.return_type)) {

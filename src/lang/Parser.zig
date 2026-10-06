@@ -1143,7 +1143,6 @@ fn sentinelForStep(step: *const Node) f64 {
     return std.math.inf(f64);
 }
 
-
 /// true when the next token immediately follows the given position (no whitespace gap)
 fn tokenAdjacent(self: *Parser, prev_end: usize) bool {
     if (self.pos >= self.tokens.len) return false;

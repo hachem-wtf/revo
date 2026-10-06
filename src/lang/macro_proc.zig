@@ -413,7 +413,6 @@ fn makeRuntimeProcCall(
     );
 }
 
-
 fn runDefaultProc(
     parent_vm: *revo.VM,
     root: *Node,
