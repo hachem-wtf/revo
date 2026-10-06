@@ -1068,9 +1068,7 @@ fn parseFor(self: *Parser, start: Token) anyerror!*Node {
 
 /// range expr in a for-loop context
 ///   ..5, 0.., 0..5, 0..2..10, 0..2..
-/// a missing end is represented as +/-inf so the vm never terminates on its own
-/// adjacency rule: `..` must touch the next token for it to be part of the range;
-/// a space after `..` means the range is open-ended and the next token starts the body
+///   a missing end is +/-inf
 fn parseForRange(self: *Parser) anyerror!*Node {
     const zero = try self.allocExpr(self.peek().span(), .{ .number = .{ .value = 0 } });
     const one = try self.allocExpr(self.peek().span(), .{ .number = .{ .value = 1 } });
@@ -1089,12 +1087,15 @@ fn parseForRange(self: *Parser) anyerror!*Node {
 
     if (!self.match(.dotdot)) return first;
 
-    return self.parseForRangeEnd(first, one, self.tokens[self.pos - 1].span().end);
+    const dotdot = self.tokens[self.pos - 1];
+    if (dotdot.span().start != first.span.end) {
+        try self.recordError(.UnexpectedToken, "`..` must be adjacent to the range start", self.peek().span());
+        return error.UnexpectedToken;
+    }
+
+    return self.parseForRangeEnd(first, one, dotdot.span().end);
 }
 
-/// After `start..` (or `..` with synthesized start), check adjacency to decide
-/// whether the next token is the range end, the step (if followed by another `..`),
-/// or the loop body (open-ended range).
 fn parseForRangeEnd(self: *Parser, start: *Node, default_step: *Node, dotdot_end: usize) anyerror!*Node {
     if (!self.tokenAdjacent(dotdot_end)) {
         const end = try self.allocExpr(self.peek().span(), .{ .number = .{ .value = sentinelForStep(default_step) } });
@@ -1109,7 +1110,12 @@ fn parseForRangeEnd(self: *Parser, start: *Node, default_step: *Node, dotdot_end
     };
 
     if (self.match(.dotdot)) {
-        const second_dd_end = self.tokens[self.pos - 1].span().end;
+        const second_dd = self.tokens[self.pos - 1];
+        if (second_dd.span().start != expr.span.end) {
+            try self.recordError(.UnexpectedToken, "`..` must be adjacent to the step", self.peek().span());
+            return error.UnexpectedToken;
+        }
+        const second_dd_end = second_dd.span().end;
         if (!self.tokenAdjacent(second_dd_end)) {
             const end = try self.allocExpr(self.peek().span(), .{ .number = .{ .value = sentinelForStep(expr) } });
             return self.buildRangeExpr(start, end, expr);
@@ -1136,6 +1142,7 @@ fn sentinelForStep(step: *const Node) f64 {
     if (val < 0) return -std.math.inf(f64);
     return std.math.inf(f64);
 }
+
 
 /// true when the next token immediately follows the given position (no whitespace gap)
 fn tokenAdjacent(self: *Parser, prev_end: usize) bool {
