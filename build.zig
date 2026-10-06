@@ -437,15 +437,15 @@ pub fn build(b: *Build) !void {
             }
         }
 
-        if (optimize == .debug) exe.lto = .none;
-        exe.rdynamic = true;
+        if (optimize == .debug) e.lto = .none;
+        e.rdynamic = true;
 
         if (builtin.target.os.tag == .linux and with_glibc) {
-            exe.use_llvm = true;
-            exe.use_lld = true;
+            e.use_llvm = true;
+            e.use_lld = true;
         }
 
-        const exe_install = b.addInstallArtifact(exe, .{});
+        const exe_install = b.addInstallArtifact(e, .{});
         const lib_install = b.addInstallArtifact(lib, .{});
         const header_install = b.addInstallDirectory(.{
             .source_dir = header_wf.getDirectory(),
@@ -463,7 +463,7 @@ pub fn build(b: *Build) !void {
         //
         const run_step = b.step("run", "run the cli");
         {
-            const run_exe = b.addRunArtifact(exe);
+            const run_exe = b.addRunArtifact(e);
             run_exe.addPassthruArgs();
             run_step.dependOn(&run_exe.step);
         }
