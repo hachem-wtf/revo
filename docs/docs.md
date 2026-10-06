@@ -193,7 +193,7 @@ the fundamental types are:
 
   they are not to be created at runtime. very useful to express tagged unions with tables
 
-  only `:false`, `0`, and `:nil` are falsey - everything else (including `""` and `{{}}`) is truthy
+  only `:false`, `0`, `:undef`, `:missing`, `:no`, `:none`, `:no_result`,  and `:nil` are falsey - everything else (including `""` and `{{}}`) is truthy
 
   for this reason, the language does not have exceptions/errors and uses
   {:err, :ErrorName} and {:ok, value} together with pattern matching, `?`, `orelse` and `:unwrap()`
@@ -232,13 +232,13 @@ the fundamental types are:
         | {:none}    => :none
     ```
 
-  parameters can be marked optional with `?`. when omitted, they default to `:no`:
+  parameters can be marked optional with `?`. when omitted, they default to `:none`:
 
     ```revo
     fn greet(name, ?greeting) greeting or "hello"
 
     greet("alice", "hi")  # "hi"
-    greet("bob")          # "hello"  (greeting is :no, `or` goes off)
+    greet("bob")          # "hello"  (greeting is :none, `or` goes off)
     ```
 
   it is always first-class, no matter how it may appear
@@ -317,10 +317,9 @@ the fundamental types are:
     "hello":index_of("ll")    # 2 or :nil
     "hello":reverse()         # "olleh"
     ("abc"):with(1, "X")      # "aXc" (0-indexed, returns new string)
-    string_join({"a", "b"}, ",") # "a,b"
     string.join({"a", "b"}, ",") # "a,b"  (namespaced function)
     "hello" ~ " world"        # concatenation
-    "ha" * 3                  # "hahaha"
+    "ha":repeat(3)            # "hahaha"
     ```
 
   found in the [std docs](./std.md#string)
@@ -806,7 +805,7 @@ let sum = 0
 for i in 0..5 do
     sum = sum + i
 end
-print(sum) # 15
+print(sum) # 10
 
 # three-part range: start..step..end
 for i in 0..2..10 do
@@ -818,7 +817,7 @@ end # 0, 2, 4, 6, 8
 for i in 10..-2.. do
     if i < 0 break
     sum = sum + i
-end # 10, 8, 6, 4, 2
+end # 10, 8, 6, 4, 2, 0
 ```
 
 ### match
@@ -1509,7 +1508,7 @@ print(comp (1 < 2))                # :true
 print(comp (1 + 2))                # only runs at compilation time
 ```
 
-### macro
+### macros
 
 macros are compile-time code transformers. they can rewrite syntax into any
 other syntax, letting you extend the language without runtime cost
