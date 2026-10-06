@@ -311,7 +311,9 @@ fn dropDisabledModules(alloc: std.mem.Allocator, specs: []FnSpec) ![]FnSpec {
                 (std.mem.eql(u8, s.head.module.?, "ffi") and !ffi_on) or
                 (std.mem.eql(u8, s.head.module.?, "http") and !http_on) or
                 (std.mem.eql(u8, s.head.module.?, "fs") and !fs_on) or
-                (std.mem.eql(u8, s.head.module.?, "net") and !net_on));
+                (std.mem.eql(u8, s.head.module.?, "file") and !fs_on) or
+                (std.mem.eql(u8, s.head.module.?, "net") and !net_on) or
+                (std.mem.eql(u8, s.head.module.?, "socket") and !net_on));
         if (disabled) {
             s.deinit(alloc);
             continue;
