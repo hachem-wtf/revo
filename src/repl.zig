@@ -32,6 +32,11 @@ const splash_texts = [_][]const u8{
     "try :h [function_name] or :h [any_variable]",
     "on course to have a negative amount of dependencies by 2030",
     "try running system({'rm', '-rf'})",
+    "it ain't thinkin' if you ain't drinkin'",
+    "soon available as an npm package",
+    "must have 10 years of expert prompt engineering experience to use",
+    "all languages are transpiled, debate over",
+    "need contributors for the enterprise Abstract Factory Builder module, we're confused",
     switch (builtin.os.tag) {
         .hurd => "monolithic kernels suck",
         .linux => "linux is better than macos",
