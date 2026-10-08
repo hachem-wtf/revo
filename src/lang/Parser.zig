@@ -2009,6 +2009,18 @@ fn parseInterpolatedString(self: *Parser, token: Token) anyerror!*Node {
             if (interpolationMode(trailing[trailing.len - 2 ..])) |found| {
                 mode = found;
                 body = body[0 .. trailing.len - 2];
+            } else if (trailing[trailing.len - 2] == ':' and
+                std.mem.trim(u8, trailing[0 .. trailing.len - 2], " \t\r\n").len != 0)
+            {
+                var msg_buf: [80]u8 = undefined;
+                const msg = std.mem.print(
+                    &msg_buf,
+                    "`{s}` doesnt work in interpolations, want :v, :? or :p",
+                    .{trailing[trailing.len - 2 ..]},
+                ) catch trailing[trailing.len - 2 ..];
+
+                try self.recordError(.UnexpectedToken, msg, token.span());
+                return self.allocExpr(token.span(), .{ .string = token.text });
             }
         }
         if (std.mem.trim(u8, body, " \t\r\n").len == 0) {
@@ -2164,6 +2176,27 @@ test "parses string interpolation as fmt calls" {
     try testing.expectPrinted("\"hello #{name}\"", "(call fmt \"hello %v\" name)");
     try testing.expectPrinted("\"#{value:?} #{value:p}\"", "(call fmt \"%? %p\" value value)");
     try testing.expectPrinted("\"literal {{brace}}\"", "\"literal {brace}\"");
+}
+
+test "unknown interpolation mode is an error" {
+    // lone atom interpolation is still fine
+    try testing.expectPrinted("\"#{:d}\"", "(call fmt \"%v\" :d)");
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const tokens = try Lexer.lexAt(alloc, "print \"#{t:d}\"", .{});
+    const result = try parseTokensReport(alloc, tokens, .{});
+    switch (result) {
+        .ok => return error.ExpectedParseFailure,
+        .err => |failure| {
+            try std.testing.expectEqualStrings(
+                "`:d` doesnt work in interpolations, want :v, :? or :p",
+                diagnostic.firstError(failure.report).?,
+            );
+        },
+    }
 }
 
 test "interpolation value nodes carry real source spans" {
