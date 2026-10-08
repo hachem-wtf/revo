@@ -883,7 +883,7 @@ pub declare revo = {
   EvalError: {
     #* first error line, never empty *#
     message: string,
-    #* :parse | :expand | :semantic | :compile | :runtime | :io *#
+    #* :parse | :expand | :semantic | :compile | :runtime | :io | :lex *#
     phase: atom,
     #* kebab-case problem slug like "type-mismatch", :nil when none *#
     code: string | :nil,
@@ -919,6 +919,18 @@ pub declare revo = {
   build failures come back as {:err, revo.EvalError}
   *#
   compile: fn(code: string) -> !string/revo.EvalError,
+
+  LexToken: {
+    type: string,
+    class: string,
+    text: string,
+    line: num,
+    column: num,
+    start: num,
+    end: num,
+  },
+  #* lex source into an array of revo.LexToken tables *#
+  lex: fn(code: string) -> !table<revo.LexToken>/revo.EvalError,
   #* version of your revo installation, like "revo v1.2.3" *#
   version: fn() -> string,
   #* worker thread count (see --threads) *#

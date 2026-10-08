@@ -64,6 +64,54 @@ pub const Impl = struct {
         }
     }
 
+    fn tokenTable(vm: *VM, src: []const u8, tok: revo.lang.Token) !Value {
+        const class: revo.lang.TokenClass = switch (tok.type) {
+            .ident => if (revo.lang.identIsFunction(src, tok.end)) .function else .variable,
+            else => tok.type.classify() orelse .variable,
+        };
+        const tid = try vm.tables.create();
+
+        try vm.putField(tid, "type", try vm.ownValueString(@tagName(tok.type)));
+        try vm.putField(tid, "class", try vm.ownValueString(@tagName(class)));
+        try vm.putField(tid, "text", try vm.ownValueString(tok.text));
+        try vm.putField(tid, "line", Value.new.num(tok.line));
+        try vm.putField(tid, "column", Value.new.num(tok.column));
+        try vm.putField(tid, "start", Value.new.num(tok.start));
+        try vm.putField(tid, "end", Value.new.num(tok.end));
+        return Value.new.table(tid);
+    }
+
+    pub fn lex(vm: *VM, source: Args.string) !HostResult {
+        const src = vm.stringValue(@backingInt(source));
+        var arena = std.heap.ArenaAllocator.init(vm.runtime.alloc);
+        defer arena.deinit();
+        const lexed = try revo.lang.lexReportAt(arena.allocator(), src, .{});
+
+        switch (lexed) {
+            .err => |failure| {
+                const rep: diagnostic.Report = .{
+                    .message = failure.message,
+                    .parts = &.{
+                        .{ .@"error" = failure.message },
+                        .{ .span = .{ .span = failure.span } },
+                    },
+                };
+                return HostResult.errValue(vm, try diagnostic.evalErrorTable(vm, rep, "<lex>", src, "lex", null, &.{}));
+            },
+            .ok => |tokens| {
+                const tid = try vm.tables.create();
+                for (tokens) |tok| {
+                    if (tok.type == .eof) continue;
+                    const tok_val = try tokenTable(vm, src, tok);
+                    // re-fetch per write so the table pointer never goes stale
+                    const ptr = try vm.tables.get(tid);
+                    try ptr.array.append(vm.runtime.alloc, tok_val);
+                }
+                return HostResult.Ok(vm, Value.new.table(tid));
+            },
+        }
+    }
+
     pub fn version(vm: *VM) !HostResult {
         const v = @import("build_options").version;
         return if (@import("builtin").mode == .debug)
@@ -92,6 +140,49 @@ test "revo.compile compiles source" {
     try testing.topAtom(
         \\ revo.compile("1 + 1")[0]
     , "ok");
+}
+
+test "revo.lex" {
+    try testing.topString(
+        \\ match revo.lex("let x = 42") | {:ok, toks} => toks[0].type | {:err, _} => "unexpected-err"
+    , "kw_let");
+    try testing.topString(
+        \\ match revo.lex("let x = 42") | {:ok, toks} => toks[0].class | {:err, _} => "unexpected-err"
+    , "keyword");
+    try testing.topString(
+        \\ match revo.lex("let x = 42") | {:ok, toks} => toks[1].class | {:err, _} => "unexpected-err"
+    , "variable");
+    try testing.topString(
+        \\ match revo.lex("let x = 42") | {:ok, toks} => toks[1].text | {:err, _} => "unexpected-err"
+    , "x");
+    try testing.topString(
+        \\ match revo.lex("let x = 42") | {:ok, toks} => toks[3].type | {:err, _} => "unexpected-err"
+    , "number");
+    try testing.topNumber(
+        \\ match revo.lex("let x = 42") | {:ok, toks} => toks[3].column | {:err, _} => -1
+    , 9);
+    try testing.topString(
+        \\ match revo.lex("add(20, 22)") | {:ok, toks} => toks[0].class | {:err, _} => "unexpected-err"
+    , "function");
+    try testing.topString(
+        \\ match revo.lex(":hi") | {:ok, toks} => toks[0].class | {:err, _} => "unexpected-err"
+    , "enum_member");
+    try testing.topString(
+        \\ match revo.lex("'hi'") | {:ok, toks} => toks[0].text | {:err, _} => "unexpected-err"
+    , "hi");
+    try testing.topString(
+        \\ match revo.lex("# hi") | {:ok, toks} => toks[0].class | {:err, _} => "unexpected-err"
+    , "comment");
+    try testing.topNumber(
+        \\ match revo.lex("1") | {:ok, toks} => toks:len() | {:err, _} => -1
+    , 1);
+
+    try testing.topAtom(
+        \\ match revo.lex("'abc") | {:ok, _} => :unexpected_ok | {:err, e} => e.phase
+    , "lex");
+    try testing.topNumber(
+        \\ match revo.lex("'abc") | {:ok, _} => -1 | {:err, e} => e.line
+    , 1);
 }
 
 test "eval diags" {

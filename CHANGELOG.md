@@ -13,11 +13,6 @@ tuples and structs are gone now, most breaking change yet
 
 ### Added
 
-- lsp hover on baselib module names shows a member card with the module doc
-- lsp hover on qualified members (`math.floor`) prefers the named module over
-  the unqualified first match
-- baselib-style native extension api, `revo.ext`
-  - see `examples/foreign/raylib`
 - structural table types: annotate tables by shape with `{ name: string, age: num }`
   - structs deprecated in favour of this, should be removed by 0.1.3
   - open subtyping: extra fields are ok, missing or mistyped fields are compile errors
@@ -176,6 +171,7 @@ tuples and structs are gone now, most breaking change yet
 - diagnostics have severity (err, warning, note, help) and slug codes. works for lsp as well
 
 - std:
+  - `revo.lex(code)` lexes source into an array of `revo.LexToken` tables
   - `stats` module -- build a table for statistics
   - `frame` module -- dataframe-like structure
   - table methods: `get` with fallback, `empty?`, `update`, `deep_copy`,
@@ -190,6 +186,16 @@ tuples and structs are gone now, most breaking change yet
     - `file.stat` / `fs.stat` take `follow?` (`:false` leaves symlinks alone, replacing `lstat`)
     - `fs.exists?` returns plain `bool` instead of `!bool`
     - `fs.touch(path)`, `fs.copy(src, dst)`
+
+  ```ruby
+  match revo.lex("let x = 42") | {:ok, toks} => toks[0].class | {:err, _} => :none
+  # "keyword"
+  ```
+- lsp hover on baselib module names shows a member card with the module doc
+- lsp hover on qualified members (`math.floor`) prefers the named module over
+  the unqualified first match
+- baselib-style native extension api, `revo.ext`
+  - see `examples/foreign/raylib`
 
 - c table api reworked around table values instead of ids:
   `get_idx`, `push`, `from_items`, name-keyed get/set, `revo_ok`/`revo_err`
