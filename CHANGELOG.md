@@ -239,6 +239,13 @@ tuples and structs are gone now, most breaking change yet
 
 ### Changed
 
+- failures in functions that run revo code come back as `{:err, revo.EvalError}` tables
+
+  ```ruby
+  match revo.eval("1/0") | {:ok, v} => v | {:err, e} => e.kind
+  # "DivisionByZero"
+  ```
+
 - a name bound twice in one place is an error
   sibling matchers may still share a name: `| {:ok, n} => n | {:err, n} => n`
 

@@ -1177,6 +1177,25 @@ print("hello", :world, 42)
 revo.eval("print(1 + 2)") # 3
 ```
 
+failures come back as `{:err, revo.EvalError}` tables instead of panicking,
+so you can inspect them programmatically. nothing prints to stderr:
+
+```revo
+match revo.eval("let x: num = 'hi'") | {:ok, v} => v | {:err, e} => e.message
+# "`x` wants number, got string"
+
+match revo.eval("1/0") | {:ok, v} => v | {:err, e} => e.kind
+# "DivisionByZero"
+```
+
+`revo.EvalError` fields: `message` (first error line), `phase`
+(`:parse | :expand | :semantic | :compile | :runtime | :io`), `code`
+(kebab-case slug like `"type-mismatch"`, else `:nil`), `line` / `column` /
+`source`, `rendered` (the full multi-line report), plus runtime-only `kind`
+and `trace` (always a table of `{function, source, line, column}` frames,
+empty when none). `revo.dofile(path)` and `revo.compile(code)` return the
+same shape (`dofile` reports missing files as `phase = :io`).
+
 ## fibers and channels
 
 fibers are cooperative (not preemptive). the main fiber runs first and the run queue is FIFO.

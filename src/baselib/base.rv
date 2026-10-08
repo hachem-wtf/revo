@@ -874,21 +874,51 @@ pub declare file = {
 #* the revo metaprogramming lib *#
 pub declare revo = {
   #*
+  structured diagnostic returned in `{:err, ...}` by functions that run revo code
+
+  ```
+  match revo.eval("let x: num = 'hi'") | {:ok, v} => v | {:err, e} => e.message
+  ```
+  *#
+  EvalError: {
+    #* first error line, never empty *#
+    message: string,
+    #* :parse | :expand | :semantic | :compile | :runtime | :io *#
+    phase: atom,
+    #* kebab-case problem slug like "type-mismatch", :nil when none *#
+    code: string | :nil,
+    #* primary span position, :nil when the error has no span *#
+    line: num | :nil,
+    #* primary span position, :nil when the error has no span *#
+    column: num | :nil,
+    #* module name or path the error came from, :nil when unknown *#
+    source: string | :nil,
+    #* full multi-line report as the cli would print it (no colors) *#
+    rendered: string,
+    #* runtime only: RunErrorKind tag like "DivisionByZero", else :nil *#
+    kind: string | :nil,
+    #* runtime stack frames as {function, source, line, column}, empty when none *#
+    trace: table,
+  },
+  #*
   evaluates it as a module, gives you back its' return value
   you can treat it as a function's body
+  static and runtime failures come back as {:err, revo.EvalError}
   *#
-  eval: fn(code: string) -> !any/string,
+  eval: fn(code: string) -> !any/revo.EvalError,
   #*
   reads the file and evaluates it as a module, gives you back its' return value
   like eval but the source comes from a file, relative paths resolve
   against the current module's directory like import, then cwd
+  failures (including missing files) come back as {:err, revo.EvalError}
   *#
-  dofile: fn(path: string) -> !any/string,
+  dofile: fn(path: string) -> !any/revo.EvalError,
   #*
   builds it as a module, gives you back its' bytecode in a string
   the string is only useful for writing to a file or executing
+  build failures come back as {:err, revo.EvalError}
   *#
-  compile: fn(code: string) -> !string,
+  compile: fn(code: string) -> !string/revo.EvalError,
   #* version of your revo installation, like "revo v1.2.3" *#
   version: fn() -> string,
   #* worker thread count (see --threads) *#

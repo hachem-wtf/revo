@@ -1,23 +1,51 @@
 const Args = root.host.ArgTypes;
 
+const diagnostic = revo.lang.diagnostic;
+
+fn runSource(vm: *VM, name: []const u8, src: []const u8, module_scope: bool) !HostResult {
+    const bytecode = switch (revo.lang.build(
+        vm,
+        .{ .name = name, .text = src },
+        .{ .module_scope = module_scope },
+    ) catch |err| return .other(@errorName(err))) {
+        .ok => |ok| ok,
+        .err => |build_err| {
+            const rep = revo.lang.pipeline.errorReport(build_err);
+            const table = try diagnostic.evalErrorTable(vm, rep, name, src, @tagName(build_err), null, &.{});
+            vm.runtime.resetDiagArena();
+            return HostResult.errValue(vm, table);
+        },
+    };
+    defer vm.runtime.alloc.free(bytecode.instructions);
+    defer vm.runtime.alloc.free(bytecode.spans);
+    const result = revo.run.runBytecodeReport(vm, name, bytecode.instructions) catch |err| return .other(@errorName(err));
+    return switch (result) {
+        .ok => HostResult.Ok(vm, vm.currentFiber().result),
+        .err => |failure| {
+            var rep = failure.report;
+            rep.parts = failure.parts[0..failure.part_len];
+            return HostResult.errValue(vm, try diagnostic.evalErrorTable(
+                vm,
+                rep,
+                name,
+                src,
+                "runtime",
+                @tagName(failure.kind),
+                failure.trace[0..failure.trace_len],
+            ));
+        },
+    };
+}
+
 pub const Impl = struct {
     pub fn eval(vm: *VM, source: Args.string) !HostResult {
         const src = vm.stringValue(@backingInt(source));
-        const res = revo.run.runModule(vm, "<eval>", src, true) catch {
-            return .other("eval failed");
-        };
-        return switch (res) {
-            .ok => HostResult.Ok(vm, vm.currentFiber().result),
-            .err => |err| {
-                const err_str = try vm.ownValueString(revo.lang.diagnostic.firstError(err.report).?);
-                return HostResult.errValue(vm, err_str);
-            },
-        };
+        return runSource(vm, "<eval>", src, true);
     }
 
     pub fn compile(vm: *VM, source: Args.string) !HostResult {
         const src = vm.stringValue(@backingInt(source));
-        const result = try revo.lang.build(vm, .{ .text = src, .name = "<anon>" }, .{});
+        const result = revo.lang.build(vm, .{ .text = src, .name = "<anon>" }, .{}) catch |err| return .other(@errorName(err));
         switch (result) {
             .ok => |bytecode| {
                 defer vm.runtime.alloc.free(bytecode.instructions);
@@ -27,11 +55,11 @@ pub const Impl = struct {
                 const sid = try vm.strings.own(bc);
                 return HostResult.Ok(vm, Value.new.str(sid));
             },
-            .err => |err| switch (err) {
-                .compile => |e| return HostResult.errValue(vm, try vm.ownValueString(revo.lang.diagnostic.firstError(e.report).?)),
-                .expand => |e| return HostResult.errValue(vm, try vm.ownValueString(revo.lang.diagnostic.firstError(e.report).?)),
-                .parse => |e| return HostResult.errValue(vm, try vm.ownValueString(revo.lang.diagnostic.firstError(e.report).?)),
-                .semantic => |e| return HostResult.errValue(vm, try vm.ownValueString(revo.lang.diagnostic.firstError(e.report).?)),
+            .err => |build_err| {
+                const rep = revo.lang.pipeline.errorReport(build_err);
+                const table = try diagnostic.evalErrorTable(vm, rep, "<anon>", src, @tagName(build_err), null, &.{});
+                vm.runtime.resetDiagArena();
+                return HostResult.errValue(vm, table);
             },
         }
     }
@@ -66,10 +94,54 @@ test "revo.compile compiles source" {
     , "ok");
 }
 
-/// > dofile(path: string) -> !any
-/// reads the file, evaluates it as a module, gives you back its' return value
-/// like eval but the source comes from a file, relative paths resolve
-/// against the current module's directory like `import`, then cwd
+test "eval diags" {
+    try testing.topAtom(
+        \\ match revo.eval("let x: num = 'hi'") | {:ok, _} => :unexpected_ok | {:err, e} => e.phase
+    , "semantic");
+    try testing.topString(
+        \\ match revo.eval("let x: num = 'hi'") | {:ok, _} => "unexpected-ok" | {:err, e} => e.code
+    , "type-mismatch");
+    try testing.topNumber(
+        \\ match revo.eval("let x: num = 'hi'") | {:ok, _} => -1 | {:err, e} => e.line
+    , 1);
+    try testing.topAtom(
+        \\ match revo.eval("1 + * 2") | {:ok, _} => :unexpected_ok | {:err, e} => e.phase
+    , "parse");
+    try testing.topNumber(
+        \\ match revo.eval("1 + * 2") | {:ok, _} => -1 | {:err, e} => e.line
+    , 1);
+    try testing.topNumber(
+        \\ match revo.eval("1 + * 2") | {:ok, _} => -1 | {:err, e} => e.column
+    , 7);
+    try testing.topAtom(
+        \\ match revo.eval("1 + * 2") | {:ok, _} => :unexpected_ok | {:err, e} => e.rendered:contains?("-->")
+    , "true");
+    try testing.topAtom(
+        \\ match revo.eval("let x = )") | {:ok, _} => :unexpected_ok | {:err, e} => e.line == :nil
+    , "true");
+    try testing.topAtom(
+        \\ match revo.eval("let x = )") | {:ok, _} => :unexpected_ok | {:err, e} => e.phase
+    , "parse");
+    try testing.topAtom(
+        \\ match revo.eval("nosuchmacro!(1)") | {:ok, _} => :unexpected_ok | {:err, e} => e.phase
+    , "expand");
+    try testing.topAtom(
+        \\ match revo.eval("1/0") | {:ok, _} => :unexpected_ok | {:err, e} => e.phase
+    , "runtime");
+    try testing.topString(
+        \\ match revo.eval("1/0") | {:ok, _} => "unexpected-ok" | {:err, e} => e.kind
+    , "DivisionByZero");
+    try testing.topString(
+        \\ match revo.eval("1/0") | {:ok, _} => "unexpected-ok" | {:err, e} => e.message
+    , "division by zero!");
+    try testing.topAtom(
+        \\ match revo.eval("1/0") | {:ok, _} => :unexpected_ok | {:err, e} => e.trace:len() > 0
+    , "true");
+    try testing.topAtom(
+        \\ match revo.compile("let x = )") | {:ok, _} => :unexpected_ok | {:err, e} => e.phase
+    , "parse");
+}
+
 pub fn dofile(args: []const Value, vm: *VM) !HostResult {
     if (args.len != 1) return .errArity(args.len, 1);
 
@@ -97,22 +169,12 @@ pub fn dofile(args: []const Value, vm: *VM) !HostResult {
         vm.runtime.alloc,
         .limited(fs.max_read_size),
     ) catch |err| {
-        const msg = try vm.ownValueString(@errorName(err));
-        return HostResult.errValue(vm, msg);
+        const rep: diagnostic.Report = .{ .message = @errorName(err) };
+        return HostResult.errValue(vm, try diagnostic.evalErrorTable(vm, rep, real_path, "", "io", null, &.{}));
     };
     defer vm.runtime.alloc.free(source);
 
-    const res = revo.run.runModule(vm, real_path, source, false) catch {
-        return .other("dofile failed");
-    };
-
-    return switch (res) {
-        .ok => HostResult.Ok(vm, vm.currentFiber().result),
-        .err => |err| {
-            const err_str = try vm.ownValueString(revo.lang.diagnostic.firstError(err.report).?);
-            return HostResult.errValue(vm, err_str);
-        },
-    };
+    return runSource(vm, real_path, source, false);
 }
 
 test "revo.dofile returns the file's value" {
