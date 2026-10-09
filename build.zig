@@ -307,7 +307,7 @@ pub fn build(b: *Build) !void {
     const features_str = b.option([]const u8, "features", "available: isocline, lsp, regex, mimalloc, ffi, zig_backend") orelse
         // isocline needs libc and not wasm; wasi gets lsp but not isocline
         // async is disabled on windows/wasi/freestanding (handled in src/root.zig)
-        if (is_freestanding) "" else if (is_wasm) "regex" else "isocline,regex,mimalloc,ffi";
+        if (is_freestanding) "" else if (is_wasm) "lsp,regex" else "isocline,regex,mimalloc,ffi";
 
     // windows can't do ffi (no dlopen); isocline/async degrade at use sites
     const test_filters = b.option([]const []const u8, "test-filter", "only run tests within the arr") orelse &.{};
